@@ -168,7 +168,7 @@ table.df td.txt { text-align: left; }
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected="true" data-tab="misiones" id="tab-misiones">Expedientes</button>
         <button role="tab" aria-selected="false" data-tab="datos" id="tab-datos">Datos</button>
-        <button role="tab" aria-selected="false" data-tab="ref" id="tab-ref">Chuleta</button>
+        <button role="tab" aria-selected="false" data-tab="ref" id="tab-ref">Códigos</button>
         <button role="tab" aria-selected="false" data-tab="ia" id="tab-ia">Analista IA</button>
       </div>
       <div class="panel" id="panel-misiones"></div>
@@ -1849,7 +1849,7 @@ function makeGlobals() {
   fn("abs", ([x]) => x instanceof Series ? x.abs() : Math.abs(num(x))); fn("list", ([x]) => x instanceof Series ? [...x.values] : x instanceof PyTuple ? [...x.items] : x instanceof PyDict ? x.entries.map((e) => e[0]) : [...x]); fn("sorted", ([x], kw) => { const a = x instanceof Series ? [...x.values] : [...x]; a.sort(cmp); if (kw.reverse) a.reverse(); return a; });
   fn("str", ([x]) => toText(x)); fn("int", ([x]) => typeof x === "string" ? parseInt(x, 10) : Math.trunc(num(x))); fn("float", ([x]) => typeof x === "string" ? parseFloat(x) : num(x)); fn("bool", ([x]) => truthy(x));
   fn("range", ([a, b, c]) => { const o = []; if (b === undefined) { for (let i = 0; i < a; i++) o.push(i); } else { for (let i = a; c > 0 || c === undefined ? i < b : i > b; i += c ?? 1) o.push(i); } return o; });
-  fn("type", ([x]) => typeName(x)); fn("help", ([x]) => { if (x instanceof PyFunc && x.doc) return x.doc; return "Abre la pestaña «Chuleta» para ver las funciones disponibles."; });
+  fn("type", ([x]) => typeName(x)); fn("help", ([x]) => { if (x instanceof PyFunc && x.doc) return x.doc; return "Abre la pestaña «Códigos» para ver las funciones disponibles."; });
   fn("dict", ([x]) => x instanceof PyDict ? x : new PyDict([])); fn("set", ([x]) => [...new Set(x instanceof Series ? x.values : x)]);
   fn("zip", (lists) => { const n = Math.min(...lists.map((l) => l.length)); return range(0, n).map((i) => new PyTuple(lists.map((l) => l[i]))); });
   // estadística y modelos
@@ -2053,13 +2053,13 @@ async function askAboutCell(cell, mode, errText) {
     body.textContent = "Pensando…"; const ctl = new AbortController(); const stop = document.createElement("button"); stop.className = "btn small"; stop.textContent = "Detener"; stop.onclick = () => ctl.abort(); $(".ai-head", box).append(stop);
     const prompt = `${LANG_REF()}\n\nCÓDIGO DE LA CELDA:\n\`\`\`python\n${code}\n\`\`\`\n${cell.lastError ? `ÚLTIMO ERROR: ${cell.lastError}\n` : ""}\nPREGUNTA DEL ESTUDIANTE: ${q}`;
     try { const { text } = await state.sample(prompt, { modelTier: mode === "explicar" ? "quick" : "default", signal: ctl.signal, onText: ({ text }) => renderAIText(body, text) }); renderAIText(body, text); }
-    catch (e) { if (e.code === "cancelled") { if (!e.text) body.textContent = "Detenido."; } else if (e.code === "not_granted" || e.code === "sampling_disabled") { state.sample = null; updateAIButtons(); body.textContent = "El asistente de IA no está disponible en esta vista. Usa la pestaña «Chuleta»."; } else if (e.code === "rate_limited") body.textContent = "Demasiadas consultas seguidas. Espera un momento e intenta de nuevo."; else body.textContent = (e.text || "") + "\nNo pude obtener respuesta. Intenta de nuevo."; }
+    catch (e) { if (e.code === "cancelled") { if (!e.text) body.textContent = "Detenido."; } else if (e.code === "not_granted" || e.code === "sampling_disabled") { state.sample = null; updateAIButtons(); body.textContent = "El asistente de IA no está disponible en esta vista. Usa la pestaña «Códigos»."; } else if (e.code === "rate_limited") body.textContent = "Demasiadas consultas seguidas. Espera un momento e intenta de nuevo."; else body.textContent = (e.text || "") + "\nNo pude obtener respuesta. Intenta de nuevo."; }
     finally { stop.remove(); }
   }
 }
 function renderIA() {
   const p = $("#panel-ia"); p.innerHTML = "";
-  if (!state.sample) { p.innerHTML = `<div class="notice">El Analista IA se activa cuando abres el laboratorio desde Claude (la primera consulta pide tu permiso). Mientras tanto, la pestaña «Chuleta» tiene todos los comandos con ejemplos.</div>`; return; }
+  if (!state.sample) { p.innerHTML = `<div class="notice">El Analista IA se activa cuando abres el laboratorio desde Claude (la primera consulta pide tu permiso). Mientras tanto, la pestaña «Códigos» tiene todos los comandos con ejemplos.</div>`; return; }
   const intro = document.createElement("p"); intro.style.cssText = "font-size:13px;color:var(--muted);margin:0 0 8px"; intro.textContent = "Pregunta en español qué código necesitas o cómo interpretar un resultado. La IA conoce las bases y las funciones del laboratorio."; p.append(intro);
   const chat = document.createElement("div"); chat.className = "chat"; p.append(chat);
   for (const m of state.chat) { const d = document.createElement("div"); d.className = "msg " + (m.role === "user" ? "u" : "a"); if (m.role === "user") d.textContent = m.content; else renderAIText(d, m.content); chat.append(d); }
@@ -2133,7 +2133,7 @@ const _renderIABase = renderIA;
 renderIA = function () {
   _renderIABase();
   const p = $("#panel-ia");
-  if (!REMOTE.ia) { if (REMOTE.ok) p.innerHTML = `<div class="notice">El asistente de IA no está configurado en este servidor. La pestaña «Chuleta» tiene todos los comandos con ejemplos.</div>`; return; }
+  if (!REMOTE.ia) { if (REMOTE.ok) p.innerHTML = `<div class="notice">El asistente de IA no está configurado en este servidor. La pestaña «Códigos» tiene todos los comandos con ejemplos.</div>`; return; }
   if (REMOTE.clave) {
     const box = document.createElement("div"); box.className = "notice"; box.style.marginTop = "10px";
     box.innerHTML = `<label for="clave-clase" style="display:block;font-weight:600;margin-bottom:4px">Clave de la clase</label><div class="ask" style="margin:0"><input type="text" id="clave-clase" placeholder="la que te dio el profesor"><button class="btn small primary">Guardar</button></div>`;
@@ -2149,6 +2149,7 @@ renderMisiones = function () {
   const who = document.createElement("div"); who.className = "notice"; who.style.cssText = "margin:0 0 12px";
   who.innerHTML = `<label for="codigo-est" style="display:block;font-weight:600;margin-bottom:4px">Tu nombre o código de estudiante</label><input type="text" id="codigo-est" placeholder="p. ej. Ana Pérez o 2024-117" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;background:var(--surface);color:var(--ink)"><div style="font-size:12px;color:var(--muted);margin-top:4px">Con esto el profesor sabe de quién es cada veredicto. Pulsa «Enviar» en cada expediente cuando lo termines.</div>`;
   const inp = $("input", who); inp.value = store.get("codigo", ""); inp.addEventListener("input", () => store.set("codigo", inp.value));
+  if (store.get("codigo_fijo", false)) { inp.readOnly = true; inp.style.opacity = ".75"; const ch = document.createElement("button"); ch.className = "btn small"; ch.textContent = "Cambiar"; ch.style.marginTop = "6px"; ch.onclick = () => { store.set("codigo_fijo", false); renderMisiones(); }; who.append(ch); who.querySelector("div").textContent = "Tus envíos quedan registrados con este nombre en este dispositivo. Si cambias de celular o computador, escribe exactamente el mismo nombre."; }
   p.insertBefore(who, p.children[2] || null);
   for (const m of MISIONES.filter((x) => x.sesion === state.sesion)) {
     const d = $(`#v-${CSS.escape(m.id)}`, p); if (!d) continue;
@@ -2158,13 +2159,41 @@ renderMisiones = function () {
       const codigo = store.get("codigo", "").trim(); if (!codigo) { inp.focus(); inp.style.outline = "2px solid var(--danger)"; return; }
       const texto = d.value.trim(); if (!texto) { d.focus(); return; }
       btn.disabled = true; btn.textContent = "Enviando…";
-      try { await apiJSON("/api/veredictos", { codigo, id: m.id, sesion: m.sesion, titulo: m.titulo, hipotesis: m.hipotesis, veredicto: texto }); const t = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }); store.set("sent:" + m.id, t); btn.textContent = `Enviado ✓ ${t}`; }
+      try { await apiJSON("/api/veredictos", { codigo, dispositivo: deviceId(), id: m.id, sesion: m.sesion, titulo: m.titulo, hipotesis: m.hipotesis, veredicto: texto }); const t = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }); store.set("sent:" + m.id, t); btn.textContent = `Enviado ✓ ${t}`; if (!store.get("codigo_fijo", false)) { store.set("codigo_fijo", true); inp.readOnly = true; inp.style.opacity = ".75"; } }
       catch (e) { btn.textContent = "No se pudo enviar, reintentar"; }
       finally { btn.disabled = false; }
     };
     row.insertBefore(btn, row.children[1] || null);
   }
 };
+
+function deviceId() { let id = store.get("dispositivo", null); if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)).slice(0, 36); store.set("dispositivo", id); } return id; }
+
+/* ---------- Panel del profesor (dentro del laboratorio) ---------- */
+function abrirProfesor() {
+  let modal = $("#modal-prof");
+  if (!modal) {
+    modal = document.createElement("div"); modal.id = "modal-prof";
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(10,16,28,.55);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow:auto";
+    modal.innerHTML = `<div style="background:var(--surface);color:var(--ink);border-radius:10px;max-width:1100px;width:100%;padding:16px 18px;box-shadow:var(--shadow)">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><h2 style="margin:0;font-family:var(--display);font-size:22px">Veredictos de los estudiantes</h2><span class="spacer" style="flex:1"></span><button class="btn small" id="prof-cerrar">Cerrar</button></div>
+      <div class="ask" style="margin-top:10px;flex-wrap:wrap"><input type="password" id="prof-clave" placeholder="Clave de profesor" style="max-width:220px"><button class="btn small primary" id="prof-cargar">Entrar</button><select id="prof-ses" class="btn small"><option value="">Todas las sesiones</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select><input type="text" id="prof-filtro" placeholder="Filtrar por nombre" style="max-width:220px"><button class="btn small" id="prof-csv" disabled>Descargar CSV</button></div>
+      <div id="prof-err" class="err" style="margin-top:8px" hidden></div>
+      <div id="prof-stats" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0"></div>
+      <div class="tbl-wrap" style="max-height:62vh;overflow:auto"><table class="df" id="prof-tabla" hidden><thead><tr><th class="idx">Estudiante</th><th class="idx">Expediente</th><th class="idx">Veredicto</th><th class="idx">Fecha</th></tr></thead><tbody></tbody></table></div></div>`;
+    document.body.append(modal);
+    let datos = null;
+    const render = () => { if (!datos) return; const ses = $("#prof-ses").value, q = $("#prof-filtro").value.trim().toLowerCase(); const rows = datos.veredictos.filter((v) => (!ses || String(v.sesion) === ses) && (!q || v.codigo.toLowerCase().includes(q))).sort((a, b) => a.codigo.localeCompare(b.codigo, "es") || a.id.localeCompare(b.id)); const est = new Set(rows.map((v) => v.clave_est || v.codigo.toLowerCase())); $("#prof-stats").innerHTML = [["estudiantes", est.size], ["veredictos (último por expediente)", rows.length], ["envíos en total", datos.total]].map(([l, n]) => `<div class="stat" style="padding:8px 14px;min-width:150px"><b style="font-size:22px;color:var(--accent)">${n}</b><br><span style="color:var(--muted);font-size:12px">${l}</span></div>`).join(""); const tb = $("#prof-tabla tbody"); tb.innerHTML = ""; for (const v of rows) { const tr = document.createElement("tr"); const td = (t, cls) => { const c = document.createElement("td"); c.className = cls || "txt"; c.textContent = t; c.style.whiteSpace = cls === "wrap" ? "pre-wrap" : "nowrap"; if (cls === "wrap") { c.style.maxWidth = "520px"; c.className = "txt"; } return c; }; tr.append(td(v.codigo), td(`${v.id} · ${v.titulo}`), td(v.veredicto, "wrap"), td(new Date(v.fecha).toLocaleString("es-CO"))); tb.append(tr); } $("#prof-tabla").hidden = false; };
+    $("#prof-cargar").onclick = async () => { $("#prof-err").hidden = true; try { datos = await apiJSON("/api/veredictos?clave=" + encodeURIComponent($("#prof-clave").value.trim())); $("#prof-csv").disabled = false; render(); } catch (e) { $("#prof-err").textContent = e.message || "No se pudo cargar."; $("#prof-err").hidden = false; } };
+    $("#prof-clave").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#prof-cargar").onclick(); });
+    $("#prof-ses").onchange = render; $("#prof-filtro").oninput = render;
+    $("#prof-csv").onclick = () => { if (!datos) return; const cols = ["codigo", "sesion", "id", "titulo", "hipotesis", "veredicto", "fecha", "dispositivo"]; const q = (x) => '"' + String(x ?? "").replace(/"/g, '""') + '"'; const lines = [cols.join(","), ...datos.historial.map((v) => cols.map((c) => q(v[c])).join(","))]; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" })); a.download = "veredictos.csv"; a.click(); };
+    $("#prof-cerrar").onclick = () => { modal.hidden = true; };
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+  }
+  modal.hidden = false; $("#prof-clave").focus();
+}
+(function () { const nav = $("#sesionNav"); if (!nav) return; const b = document.createElement("button"); b.className = "btn small"; b.id = "profBtn"; b.textContent = "Profesor"; b.title = "Ver los veredictos enviados (requiere clave)"; b.onclick = abrirProfesor; nav.parentElement.insertBefore(b, nav); })();
 
 </script>
 </body>

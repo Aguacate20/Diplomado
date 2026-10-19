@@ -1,5 +1,6 @@
 // POST: guarda un veredicto. GET ?clave=...: lista todos (solo el profesor).
 const { guardarVeredicto, listarVeredictos, limitar, ip, body, cors } = require("./_lib");
+const normalizar = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const limpiar = (s, n) => String(s ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim().slice(0, n);
 
 module.exports = async (req, res) => {
@@ -8,7 +9,7 @@ module.exports = async (req, res) => {
   if (req.method === "POST") {
     if (!(await limitar("ver:" + ip(req), 30, 60))) return res.status(429).json({ error: "Demasiados envíos seguidos." });
     const b = body(req);
-    const v = { codigo: limpiar(b.codigo, 80), id: limpiar(b.id, 10), sesion: Number(b.sesion) || 0, titulo: limpiar(b.titulo, 120), hipotesis: limpiar(b.hipotesis, 300), veredicto: limpiar(b.veredicto, 4000), fecha: new Date().toISOString() };
+    const v = { codigo: limpiar(b.codigo, 80), clave_est: normalizar(b.codigo), dispositivo: limpiar(b.dispositivo, 40), id: limpiar(b.id, 10), sesion: Number(b.sesion) || 0, titulo: limpiar(b.titulo, 120), hipotesis: limpiar(b.hipotesis, 300), veredicto: limpiar(b.veredicto, 4000), fecha: new Date().toISOString() };
     if (!v.codigo || !v.id || !v.veredicto) return res.status(400).json({ error: "Faltan el código del estudiante, el expediente o el texto." });
     try { await guardarVeredicto(v); return res.status(200).json({ ok: true, fecha: v.fecha }); }
     catch (e) { return res.status(500).json({ error: "No se pudo guardar: " + e.message }); }

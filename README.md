@@ -27,17 +27,24 @@ Proyecto → **Settings → Environment Variables**:
 | `NVIDIA_API_KEY` | sí (para la IA) | la clave del paso 1 |
 | `CLAVE_PROFESOR` | sí (para ver veredictos) | la contraseña que escribes en `/profesor.html` |
 | `CLAVE_CLASE` | no | si la defines, los estudiantes deben escribirla una vez (pestaña «Analista IA») para usar la IA; evita que desconocidos gasten tus créditos |
-| `NVIDIA_MODEL` | no | por defecto `meta/llama-3.1-70b-instruct` |
-| `NVIDIA_MODEL_QUICK` | no | modelo para «¿Qué hace?» (más rápido); por defecto `meta/llama-3.1-8b-instruct` |
+| `NVIDIA_MODEL` | no | fuerza un modelo concreto. Si no se define, el servidor consulta los modelos disponibles de tu clave y elige uno solo (NVIDIA retira modelos con frecuencia y responden «410 Gone»; si el elegido muere, pasa al siguiente) |
+| `NVIDIA_MODEL_QUICK` | no | igual, para las explicaciones rápidas («¿Qué hace?») |
 | `LIMITE_POR_MINUTO` | no | consultas de IA por minuto por persona (15) |
 | `LIMITE_POR_DIA` | no | consultas de IA por día para toda la clase (1500) |
 
 Después de guardar variables, haz **Redeploy** (Deployments → ⋯ → Redeploy) para que apliquen.
 
 ### 5. Probar
+- `https://tu-proyecto.vercel.app/api/modelos` muestra qué modelos tiene tu clave y cuáles usará el laboratorio (útil si la IA da error).
 - Abre `https://tu-proyecto.vercel.app` → pestaña **Analista IA** debe mostrar el chat (si falta la clave, muestra un aviso).
 - Escribe un nombre en «Tu nombre o código», un veredicto, y pulsa **Enviar al profesor**.
-- Abre `https://tu-proyecto.vercel.app/profesor.html`, escribe `CLAVE_PROFESOR` → debe aparecer el veredicto. **Descargar CSV** baja el historial completo.
+- Pulsa el botón **Profesor** (arriba, junto a las sesiones), escribe `CLAVE_PROFESOR` → debe aparecer el veredicto. **Descargar CSV** baja el historial completo. (También existe `/profesor.html` como página aparte.)
+
+## Cómo se identifica a cada estudiante
+No se usa la dirección IP: en el wifi de un salón todos comparten la misma, y los celulares la cambian a cada rato. En su lugar:
+- El nombre o código que escribe el estudiante se **normaliza** en el servidor (sin tildes, mayúsculas ni espacios de más), así «Ana Pérez», «ana perez» y «ANA  PEREZ» cuentan como la misma persona.
+- Tras el primer envío, el nombre queda **fijo en ese dispositivo** (botón «Cambiar» si se equivocó) y cada envío lleva además un identificador del dispositivo, que va en el CSV por si dos personas escribieron el mismo nombre.
+- Recomendación práctica: pídeles que usen siempre el mismo dato, idealmente el código de estudiante.
 
 ## Probar en tu computador (opcional)
 ```
@@ -55,6 +62,7 @@ public/index.html     laboratorio (un solo archivo)
 public/data/*.csv     bases limpias
 public/profesor.html  panel de veredictos
 api/ping.js           dice qué está configurado
+api/modelos.js        lista los modelos de NVIDIA disponibles para tu clave
 api/preguntar.js      proxy a NVIDIA con límites de uso
 api/veredictos.js     guarda (POST) y lista (GET, con clave) los veredictos
 api/_lib.js           Redis/archivo local y límites

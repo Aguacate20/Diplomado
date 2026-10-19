@@ -27,8 +27,9 @@ async function listarVeredictos() {
   if (hasRedis()) arr = (await redis("LRANGE", "veredictos", 0, -1)).map((s) => JSON.parse(s));
   else arr = readLocal();
   // el último envío de cada (código, expediente) es el que vale; se conserva el historial en bruto
+  // la identidad del estudiante es su nombre/código normalizado (sin tildes, mayúsculas ni espacios extra)
   const ultimo = new Map();
-  for (const v of arr) ultimo.set(`${v.codigo}\u0001${v.id}`, v);
+  for (const v of arr) { const k = (v.clave_est || String(v.codigo).toLowerCase().trim()) + "\u0001" + v.id; ultimo.set(k, v); }
   return { todos: arr, ultimos: [...ultimo.values()] };
 }
 
