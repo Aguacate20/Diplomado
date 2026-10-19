@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Veredictos · Laboratorio de Evidencias</title>
+<style>
+:root { --bg: #eef0f3; --surface: #fff; --ink: #1b2430; --muted: #5c6b73; --line: #d7dde4; --accent: #1f5fa8; --tape: #d9822b; }
+@media (prefers-color-scheme: dark) { :root { --bg: #12161c; --surface: #1a2029; --ink: #e8ecf1; --muted: #9aa7b4; --line: #2e3844; --accent: #6ea4e8; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; padding: 20px max(16px, 3vw); }
+h1 { font-size: 24px; margin: 0 0 4px; } .sub { color: var(--muted); margin: 0 0 16px; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+input, select { border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit; background: var(--surface); color: var(--ink); }
+button { border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; font: inherit; background: var(--surface); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0 16px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 140px; }
+.stat b { font-size: 24px; display: block; color: var(--accent); }
+.stat span { color: var(--muted); font-size: 13px; }
+table { border-collapse: collapse; width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 14px; }
+th { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); position: sticky; top: 0; }
+td.v { white-space: pre-wrap; max-width: 560px; }
+td.c { white-space: nowrap; color: var(--muted); font-size: 13px; }
+.tag { display: inline-block; background: color-mix(in srgb, var(--tape) 18%, var(--surface)); color: var(--tape); border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+.err { color: #c0392b; margin: 10px 0; }
+.wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Veredictos de los estudiantes</h1>
+<p class="sub">Laboratorio de Evidencias · se muestra el último envío de cada estudiante por expediente; el historial completo va en el CSV.</p>
+<div class="bar">
+  <input type="password" id="clave" placeholder="Clave de profesor" autocomplete="current-password">
+  <button class="primary" id="cargar">Cargar</button>
+  <select id="fSesion"><option value="">Todas las sesiones</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select>
+  <input type="text" id="fTexto" placeholder="Filtrar por nombre o código">
+  <button id="csv" disabled>Descargar CSV</button>
+</div>
+<div class="err" id="err" hidden></div>
+<div class="stats" id="stats" hidden></div>
+<div class="wrap"><table id="tabla" hidden><thead><tr><th>Estudiante</th><th>Expediente</th><th>Veredicto</th><th>Fecha</th></tr></thead><tbody></tbody></table></div>
+<script>
+let datos = null;
+const $ = (s) => document.querySelector(s);
+try { $("#clave").value = sessionStorage.getItem("claveProfesor") || ""; } catch {}
+async function cargar() {
+  const clave = $("#clave").value.trim(); $("#err").hidden = true;
+  try {
+    const r = await fetch("/api/veredictos?clave=" + encodeURIComponent(clave)); const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    datos = j; try { sessionStorage.setItem("claveProfesor", clave); } catch {}
+    $("#csv").disabled = false; render();
+  } catch (e) { $("#err").textContent = e.message; $("#err").hidden = false; }
+}
+function render() {
+  if (!datos) return;
+  const ses = $("#fSesion").value, q = $("#fTexto").value.trim().toLowerCase();
+  const rows = datos.veredictos.filter((v) => (!ses || String(v.sesion) === ses) && (!q || v.codigo.toLowerCase().includes(q))).sort((a, b) => a.codigo.localeCompare(b.codigo, "es") || a.id.localeCompare(b.id));
+  const est = new Set(rows.map((v) => v.codigo));
+  $("#stats").innerHTML = `<div class="stat"><b>${est.size}</b><span>estudiantes</span></div><div class="stat"><b>${rows.length}</b><span>veredictos (último por expediente)</span></div><div class="stat"><b>${datos.total}</b><span>envíos en total</span></div>`;
+  $("#stats").hidden = false;
+  const tb = $("#tabla tbody"); tb.innerHTML = "";
+  for (const v of rows) { const tr = document.createElement("tr"); tr.innerHTML = `<td>${esc(v.codigo)}</td><td><span class="tag">${esc(v.id)}</span><br>${esc(v.titulo)}</td><td class="v">${esc(v.veredicto)}</td><td class="c">${new Date(v.fecha).toLocaleString("es-CO")}</td>`; tb.append(tr); }
+  $("#tabla").hidden = false;
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function csv() {
+  if (!datos) return;
+  const cols = ["codigo", "sesion", "id", "titulo", "hipotesis", "veredicto", "fecha"];
+  const q = (s) => '"' + String(s ?? "").replace(/"/g, '""') + '"';
+  const lines = [cols.join(","), ...datos.historial.map((v) => cols.map((c) => q(v[c])).join(","))];
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "veredictos.csv"; a.click();
+}
+$("#cargar").onclick = cargar; $("#csv").onclick = csv; $("#fSesion").onchange = render; $("#fTexto").oninput = render;
+$("#clave").addEventListener("keydown", (e) => { if (e.key === "Enter") cargar(); });
+</script>
+</body>
+</html>

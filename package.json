@@ -1,0 +1,8 @@
+{
+  "name": "laboratorio-de-evidencias",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Laboratorio de Evidencias: cuaderno de análisis de datos criminales en el navegador, con asistente de IA (NVIDIA NIM) y recolección de veredictos.",
+  "scripts": { "dev": "node dev-server.js" },
+  "engines": { "node": ">=18" }
+}
