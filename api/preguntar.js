@@ -9,8 +9,11 @@ const POR_MINUTO_RED = Number(process.env.LIMITE_POR_MINUTO_RED || 200);   // po
 const POR_DIA = Number(process.env.LIMITE_POR_DIA || 3000);                // toda la clase
 const LENTO_MS = 25000;
 // Orden de preferencia (el primero que exista en la cuenta y no esté en pausa gana). Se puede fijar con NVIDIA_MODEL / NVIDIA_MODEL_QUICK.
-const PREFERIDOS = ["openai/gpt-oss-120b", "nvidia/nemotron-3-super-120b-a12b", "deepseek-ai/deepseek-v4.1-flash", "z-ai/glm-5.3", "nvidia/nemotron-3-ultra-550b-a55b", "moonshotai/kimi-k2.6", "mistralai/mistral-large-2-instruct", "meta/llama-3.3-70b-instruct", "qwen/qwen3-235b-a22b", "nvidia/llama-3.1-nemotron-70b-instruct", "openai/gpt-oss-20b"];
-const PREFERIDOS_RAPIDOS = ["nvidia/nemotron-3.5-lightning-30b-a3b", "z-ai/glm-5.3-flash", "deepseek-ai/deepseek-v4.1-flash", "nvidia/nemotron-3-super-120b-a12b", "minimaxai/minimax-m3.1-flash", "openai/gpt-oss-20b", "nvidia/nemotron-nano-3-30b-a3b", "meta/llama-3.1-8b-instruct"];
+// Medido el 27-oct-2026 con /api/modelos?probar=1: nemotron-3-ultra ≈ 6 s, nemotron-3.5-lightning < 1 s, gpt-oss-20b ≈ 18 s;
+// deepseek-v4.1-flash, glm-5.3 y gemma-4 tardaron más de 45 s; super, kimi y mistral-large aparecen en el catálogo pero dan 404 en esta cuenta.
+const PREFERIDOS = ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning-30b-a3b", "openai/gpt-oss-120b", "nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-20b", "meta/llama-3.3-70b-instruct", "qwen/qwen3-235b-a22b", "minimaxai/minimax-m3.1-flash", "deepseek-ai/deepseek-v4.1-flash", "z-ai/glm-5.3"];
+const PREFERIDOS_RAPIDOS = ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-20b", "nvidia/nemotron-3.5-bolt-e4b", "minimaxai/minimax-m3.1-flash"];
+const MAX_POR_INTENTO = 22000; // si un modelo no responde en 22 s se pasa al siguiente
 const EXCLUIR = /embed|rerank|vision|-vl|whisper|tts|asr|guard|safety|parakeet|clip|nemoretriever|image|video|audio|ocr|parse|reward|omni|diffusion|coder|codegemma|codellama|codestral|chatqa|llama2|gemma-2b|recurrent|minitron|sea-lion|-7b|-8b/i;
 const SISTEMA = "Eres el Analista IA de un laboratorio de análisis de datos criminales para estudiantes sin formación técnica (psicólogos, funcionarios). Respondes siempre en español, de forma breve y clara.\n"
   + "El laboratorio NO es Python completo: es un subconjunto de pandas que corre en el navegador. Reglas obligatorias para el código:\n"
@@ -89,13 +92,13 @@ module.exports = async (req, res) => {
     if (!candidatos.length) return res.status(502).json({ error: "La cuenta de NVIDIA no tiene ningún modelo de chat disponible. Revisa build.nvidia.com." });
     for (const modelo of candidatos) {
       const resta = 56000 - (Date.now() - inicio); if (resta < 6000) break;
-      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), Math.min(resta, intentos.length ? resta : 32000));
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), Math.min(resta, MAX_POR_INTENTO));
       let r;
       try { r = await llamar(modelo, messages, ctl.signal); }
-      catch (e) { intentos.push(`${modelo}: ${e.name === "AbortError" ? "tardó demasiado" : e.message}`); await marcar("pausa:" + modelo, 300); continue; }
+      catch (e) { intentos.push(`${modelo}: ${e.name === "AbortError" ? "tardó demasiado" : e.message}`); await marcar("pausa:" + modelo, e.name === "AbortError" ? 1800 : 300, e.name === "AbortError" ? "lento" : "error"); continue; }
       finally { clearTimeout(timer); }
       if (r.ok && r.text) {
-        if (r.ms > LENTO_MS) await marcar("pausa:" + modelo, 180, "lento");
+        if (r.ms > LENTO_MS) await marcar("pausa:" + modelo, 600, "lento");
         return res.status(200).json({ text: r.text, model: modelo, ms: r.ms, intentos });
       }
       const detalle = r.j && r.j.error && r.j.error.message ? r.j.error.message : r.j && r.j.detail ? (typeof r.j.detail === "string" ? r.j.detail : JSON.stringify(r.j.detail)) : "";

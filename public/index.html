@@ -199,6 +199,21 @@ table.df td.txt { text-align: left; }
 .ia-badge.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
 .ia-aviso { font-size: 12.5px; color: var(--danger); margin: 2px 0 8px; }
 .ia-estado { font-size: 12.5px; color: var(--muted); margin-top: 8px; font-style: italic; }
+.armar { margin: 8px 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface2); }
+.armar .gt { font-weight: 600; font-size: 12.5px; margin-bottom: 6px; }
+.armar-pre { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.armar-pre .hueco { display: inline-block; min-width: 1.6em; padding: 0 4px; border: 1.5px dashed var(--warn); border-radius: 5px; color: var(--warn); font-weight: 600; text-align: center; }
+.armar-pre .hueco.lleno { border-style: solid; border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.hueco-fila { margin: 8px 0; }
+.hueco-fila .hq { font-size: 13px; margin-bottom: 5px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: 100%; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.chip b { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; font-size: 12px; }
+.chip small { color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.armar-acc { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 </style>
 <div class="app">
   <header class="topbar">
@@ -1151,6 +1166,9 @@ function anova(a, b, kw = {}) {
 
 function chi_cuadrado(tabla) {
   if (!(tabla instanceof DataFrame)) throw new LabError("chi_cuadrado recibe una tabla cruzada: chi_cuadrado(pd.crosstab(df[\"a\"], df[\"b\"]))");
+  { const cs = tabla.columns.filter((c) => c !== "Total"); const vals = cs.flatMap((c) => tabla.data[c]);
+    if (tabla.length > 300 || vals.some((x) => !isNum(x))) throw new LabError("chi_cuadrado necesita una tabla cruzada de conteos, no la base de casos fila por fila.", "Arma primero la tabla: tabla = pd.crosstab(df[\"fila\"], df[\"columna\"]) y luego chi_cuadrado(tabla).");
+    if (vals.every((x) => x >= 0 && x <= 1) && vals.some((x) => x > 0 && x < 1)) throw new LabError("chi_cuadrado necesita conteos, no proporciones ni porcentajes.", "Usa la tabla cruzada sin normalize."); }
   const cols = tabla.columns.filter((c) => c !== "Total"); const R = tabla.length, C = cols.length;
   const obs = tabla.index.map((_, i) => cols.map((c) => tabla.data[c][i]));
   const rs = obs.map((r) => r.reduce((a, b) => a + b, 0)), cs = cols.map((_, j) => obs.reduce((a, r) => a + r[j], 0)); const N = rs.reduce((a, b) => a + b, 0);
@@ -1476,7 +1494,16 @@ function grafico_barras(obj, kw = {}) { if (obj instanceof StatResult) obj = obj
 function grafico_lineas(obj, kw = {}) { return plotObject(obj, { ...kw, kind: "line" }); }
 function histograma(s, kw = {}) { if (s instanceof DataFrame) throw new LabError("histograma recibe una columna: histograma(df[\"edad_aprox\"])"); return histogramFigure(s, kw); }
 function dispersion(df, kw = {}, pos = []) { if (df instanceof StatResult && df.fields.componentes) df = df.fields.componentes; if (!(df instanceof DataFrame)) throw new LabError("dispersion(df, x=\"col\", y=\"col\", color=\"col\")"); const x = kw.x ?? pos[0], y = kw.y ?? pos[1]; if (!x || !y) throw new LabError("dispersion necesita x= y y=.", "Ejemplo: dispersion(perfil, x=\"pct_arma_fuego\", y=\"edad_media\", color=\"cluster\")"); return scatterFigure(df, x, y, kw); }
-function mapa_calor(obj, kw = {}) { if (obj instanceof StatResult && obj.fields.residuos) obj = obj.fields.residuos; if (!(obj instanceof DataFrame)) throw new LabError("mapa_calor recibe una tabla cruzada: mapa_calor(pd.crosstab(df[\"dia_semana\"], df[\"rango_hora\"]))"); return heatmapFigure(obj, kw); }
+function normalizarTabla(df, how) {
+  const tipos = { index: "filas", filas: "filas", columns: "columnas", columnas: "columnas", all: "total", total: "total" }; const modo = how === true ? "total" : tipos[how];
+  if (!modo) throw new LabError("normalize puede ser \"index\" (cada fila suma 100 %), \"columns\" (cada columna) o \"all\" (toda la tabla); False deja los conteos.");
+  const cols = df.columns.filter((c) => c !== "Total"); const n = df.length; const d = {}; const v = (x) => (isNum(x) ? x : 0);
+  if (modo === "filas") { const rs = range(0, n).map((i) => cols.reduce((t, c) => t + v(df.data[c][i]), 0)); cols.forEach((c) => { d[c] = df.data[c].map((x, i) => (rs[i] ? v(x) / rs[i] : NaN)); }); }
+  else if (modo === "columnas") cols.forEach((c) => { const s = df.data[c].reduce((t, x) => t + v(x), 0); d[c] = df.data[c].map((x) => (s ? v(x) / s : NaN)); });
+  else { const tot = cols.reduce((t, c) => t + df.data[c].reduce((a, x) => a + v(x), 0), 0); cols.forEach((c) => { d[c] = df.data[c].map((x) => (tot ? v(x) / tot : NaN)); }); }
+  const out = new DataFrame(d, { columns: cols, index: [...df.index], indexName: df.indexName }); out.colsName = df.colsName; return out;
+}
+function mapa_calor(obj, kw = {}) { if (obj instanceof StatResult && obj.fields.residuos) obj = obj.fields.residuos; if (obj instanceof DataFrame && kw.normalize) { const how = kw.normalize; obj = normalizarTabla(obj, how); const suf = { index: " · % de cada fila", columns: " · % de cada columna", all: " · % del total" }[how === true ? "all" : how] || ""; kw = { ...kw, titulo: (kw.titulo ?? kw.title ?? "") + suf, formato: "pct" }; } if (!(obj instanceof DataFrame)) throw new LabError("mapa_calor recibe una tabla cruzada: mapa_calor(pd.crosstab(df[\"dia_semana\"], df[\"rango_hora\"]))"); return heatmapFigure(obj, kw); }
 function cajas(df, kw = {}) {
   if (df instanceof Series) return boxFigure([{ name: df.name, values: df.numeric() }], kw);
   const valor = kw.valor ?? kw.y, grupo = kw.grupo ?? kw.por ?? kw.x; if (!valor) throw new LabError("cajas(df, valor=\"columna numérica\", grupo=\"columna de grupos\")");
@@ -1636,6 +1663,11 @@ const CHECKS = {
   vichada: () => state.data.vif.col("departamento").values.filter((x) => x === "Vichada").length,
 };
 
+/* Andamiaje de la sesión 3: cada espacio ___ de un esqueleto tiene opciones para elegir (sin teclear código).
+   op: valor (texto) o { v: valor, t: etiqueta, d: descripción }; si no hay d, se usa el diccionario de columnas. */
+const OP_NORMALIZE = [{ v: "all", t: "\"all\" · toda la tabla suma 100 %" }, { v: "columns", t: "\"columns\" · cada columna suma 100 %" }, { v: "index", t: "\"index\" · cada fila suma 100 %" }];
+const OP_K = ["2", "3", "4", "5"].map((v) => ({ v, t: "k = " + v }));
+
 const MISIONES = [
   /* ---------------- SESIÓN 1 ---------------- */
   { id: "1-1", sesion: 1, titulo: "Abrir el expediente", concepto: "Anatomía de una tabla",
@@ -1735,19 +1767,28 @@ const MISIONES = [
     prediccion: { q: "Antes de mirar los datos: ¿qué turno de 6 horas crees que concentra más homicidios?", op: ["Sábado de 18:00 a 23:59", "Domingo de 00:00 a 05:59", "Domingo de 18:00 a 23:59", "Viernes de 18:00 a 23:59", "Ninguno: todos se parecen"] },
     pasos: [
       { q: "¿Con cuánta información sobre la hora cuentas?",
-        pista: "La columna rango_hora agrupa la hora del hecho en franjas de 3 horas. Cuenta sus categorías en porcentaje: value_counts con normalize, multiplicado por 100.",
+        pista: "Busca la columna que guarda la hora del hecho y que tenga una categoría para los casos en que no se sabe. value_counts cuenta las categorías; con normalize=True da la proporción de cada una y, al multiplicar por 100, el porcentaje.",
         esq: "(homicidios[\"___\"].value_counts(normalize=___) * 100).round(1)",
+        huecos: [
+          { q: "¿Qué columna guarda la hora del hecho? Alguna de estas sirve; lee qué tiene cada una.", op: ["hora_inicio", "dia_semana", "rango_hora"] },
+          { q: "¿Quieres contar casos o ver qué parte del total es cada categoría?", op: [{ v: "False", t: "False · número de casos", d: "Cuenta casos. Multiplicado por 100 daría cifras sin sentido." }, { v: "True", t: "True · proporción del total", d: "Cada categoría como parte del total (de 0 a 1). Por 100 queda en %." }] } ],
         cer: { q: "¿Qué porcentaje de los casos NO tiene la hora registrada?", unidad: "%", tol: 0.3, calc: "sinHora", ayuda: "Busca la categoría «Sin información» en el resultado. ¿Usaste normalize=True y multiplicaste por 100?", despues: "Casi la mitad de los casos. Antes de quitarlos, averigua quiénes son." } },
       { q: "Si quitas los casos sin hora, ¿a quién dejas por fuera?",
         pista: "Crea una columna verdadero/falso que diga si falta la hora. Crúzala primero con dia_semana y después con departamento, en % por fila. ¿La falta es pareja en los dos cruces?",
         esq: "homicidios[\"sin_hora\"] = homicidios[\"rango_hora\"] == \"Sin información\"\npd.crosstab(homicidios[\"___\"], homicidios[\"sin_hora\"], normalize=\"index\").round(2)",
+        huecos: [
+          { q: "¿Con qué variable comparas la falta de hora? Necesitas mirar por lo menos dos: elige una, ejecuta, mira el resultado y luego cambia.", op: ["zona", "dia_semana", "departamento"] } ],
         dec: { q: "Mirando los dos cruces, ¿qué haces con los casos «Sin información»?", op: [
           { t: "Los dejo como una franja horaria más", ok: false, fb: "«Sin información» no es una hora. Si la dejas, la mitad de cada fila cae en una columna que no dice cuándo ocurrió el hecho." },
           { t: "Los quito; no hace falta advertir nada porque faltan parejo", ok: false, fb: "Por día sí faltan parejo, pero revisa el cruce por departamento: en unos casi siempre se registra la hora y en otros casi nunca." },
           { t: "Los quito, pero advierto que la tabla refleja sobre todo a los departamentos que sí registran la hora", ok: true, fb: "Eso es. Por día la falta es pareja (entre 46 % y 50 %), así que el patrón día × hora se puede leer; por departamento es muy desigual. Esa advertencia va en tu veredicto." } ] } },
       { q: "Arma la tabla día × franja y decide qué cifra responde la pregunta del comandante.",
-        pista: "Trabaja solo con los casos que tienen hora. pd.crosstab(filas, columnas) cuenta casos; con normalize=\"index\" obtienes % por fila, con \"columns\" % por columna y con \"all\" % sobre el total de la tabla. Prueba más de una.",
-        esq: "h = homicidios[homicidios[\"rango_hora\"] != \"Sin información\"]\ntabla = pd.crosstab(h[\"___\"], h[\"___\"])\nmapa_calor(tabla, titulo=\"Homicidios por día y franja horaria\")",
+        pista: "Trabaja solo con los casos que tienen hora. pd.crosstab(filas, columnas) cuenta casos y la guarda en «tabla». El mapa de calor puede mostrar esa misma tabla de cuatro maneras: conteos, % por fila, % por columna o % del total. Prueba más de una y fíjate qué celda resalta cada una.",
+        esq: "h = homicidios[homicidios[\"rango_hora\"] != \"Sin información\"]\ntabla = pd.crosstab(h[\"___\"], h[\"___\"])\nmapa_calor(tabla, normalize=___, titulo=\"Homicidios por día y franja horaria\")",
+        huecos: [
+          { q: "Filas de la tabla: ¿qué columna tiene el día?", op: ["mes", "rango_hora", "dia_semana"] },
+          { q: "Columnas de la tabla: ¿qué columna tiene la franja horaria?", op: ["dia_semana", "rango_hora", "hora_inicio"] },
+          { q: "¿Cómo quieres ver la tabla en el mapa de calor? Prueba varias.", op: [{ v: "False", t: "False · conteos", d: "Número de casos en cada celda." }, { v: "\"index\"", t: "\"index\" · % por fila", d: "Cada día suma 100 %." }, { v: "\"columns\"", t: "\"columns\" · % por columna", d: "Cada franja suma 100 %." }, { v: "\"all\"", t: "\"all\" · % del total", d: "Toda la semana suma 100 %." }] } ],
         dec: { q: "El comandante quiere saber en qué celda de toda la semana poner el refuerzo. ¿Qué tabla le responde?", op: [
           { t: "La de % por fila", ok: false, fb: "El % por fila responde otra pregunta: «dentro del lunes, ¿a qué hora ocurre?». Un día con pocos casos puede tener un % alto y aun así pocos homicidios. Compáralas." },
           { t: "La de % por columna", ok: false, fb: "El % por columna responde: «de lo que pasa entre 00:00 y 02:59, ¿qué día ocurre?». Sirve para comparar días dentro de una franja, no todas las celdas de la semana." },
@@ -1755,10 +1796,15 @@ const MISIONES = [
       { q: "¿Qué celda tiene muchos más casos de los que le tocarían si día y hora no tuvieran relación?",
         pista: "chi_cuadrado compara lo observado con lo esperado. Debajo del resultado aparece la tabla de residuos: por encima de +2 hay más casos de los esperados.",
         esq: "chi_cuadrado(___)",
+        huecos: [
+          { q: "¿Qué le das a chi_cuadrado? Necesita una tabla cruzada con conteos.", op: [{ v: "h", t: "h", d: "La base de casos con hora, fila por fila (no es una tabla cruzada)." }, { v: "pd.crosstab(homicidios[\"dia_semana\"], homicidios[\"rango_hora\"])", t: "la tabla con todos los casos", d: "Día × franja, incluida la columna «Sin información»." }, { v: "tabla", t: "tabla", d: "La tabla día × franja que armaste, solo con los casos que tienen hora." }] } ],
         cer: { q: "¿Cuánto vale el residuo más alto de toda la tabla?", tol: 0.15, calc: "maxResiduo", ayuda: "Recorre la tabla de residuos y busca el número más grande. ¿Le pasaste la tabla de conteos sin «Sin información»?", despues: "Mira de qué día y franja es esa celda. ¿De qué noche es, en realidad, la madrugada del domingo?" } },
       { q: "La noche no respeta el calendario: ¿qué pasa con un turno que cruza la medianoche?",
         pista: "Lees una celda con tabla[\"franja\"][\"día\"]. Un turno de 6 horas son dos franjas seguidas. Compara el turno de la hipótesis (sábado de 18:00 a 23:59) con uno que empiece el sábado a las 21:00 y termine el domingo a las 02:59.",
         esq: "turno_hipotesis = tabla[\"18:00 a 20:59\"][\"sábado\"] + tabla[\"21:00 a 23:59\"][\"sábado\"]\nturno_cruce = tabla[\"21:00 a 23:59\"][\"sábado\"] + tabla[\"___\"][\"___\"]\n[turno_hipotesis, turno_cruce]",
+        huecos: [
+          { q: "¿Qué franja viene justo después de «21:00 a 23:59»?", op: [{ v: "18:00 a 20:59", d: "La primera parte de la noche." }, { v: "00:00 a 02:59", d: "La madrugada." }, { v: "03:00 a 05:59", d: "El final de la madrugada." }] },
+          { q: "Esa madrugada, ¿en qué día queda registrada?", op: [{ v: "viernes", d: "El día anterior." }, { v: "sábado", d: "El día en que empezó la noche." }, { v: "domingo", d: "El día que empieza a medianoche." }] } ],
         cer: { q: "¿Cuántos casos suma el turno del sábado 21:00 al domingo 02:59?", tol: 0.5, calc: "turnoCruce", ayuda: "La segunda franja es la del domingo de 00:00 a 02:59. Escribe la franja y el día exactamente como aparecen en la tabla." } },
     ],
     veredicto: "¿Qué turno le recomiendas al comandante? ¿Qué le advertirías sobre los datos?" },
@@ -1771,6 +1817,10 @@ const MISIONES = [
       { q: "¿Qué tabla cruzada convierte a cada departamento en un perfil?",
         pista: "Trabaja con los seis agresores de la lista. Un perfil es «de cada 100 agresiones en este departamento, cuántas son del padre, de la madre…». Piensa qué tiene que sumar 100 %: ¿cada departamento o cada agresor?",
         esq: "agresores = [\"Padre\", \"Madre\", \"Padrastro\", \"Hermano\", \"Cuñado\", \"Hijo\"]\nv6 = vif[vif[\"agresor\"].isin(agresores)]\nperfil = pd.crosstab(v6[\"___\"], v6[\"___\"], normalize=\"___\")\nperfil.round(3)",
+        huecos: [
+          { q: "Filas: ¿qué quieres agrupar? Cada fila será un perfil.", op: ["agresor", "tipo_violencia", "departamento"] },
+          { q: "Columnas: ¿de qué está hecho cada perfil?", op: ["departamento", "agresor", "sexo_victima"] },
+          { q: "¿Qué tiene que sumar 100 %?", op: OP_NORMALIZE } ],
         dec: { q: "¿Qué normalización usaste?", op: [
           { t: "\"index\": cada departamento suma 100 %", ok: true, fb: "Eso es un perfil. Así se pueden comparar Bogotá y Vichada aunque una tenga 500 veces más casos que la otra." },
           { t: "\"columns\": cada agresor suma 100 %", ok: false, fb: "Pruébalo y mira a Bogotá: sale alta en todas las columnas. No es un perfil, es tamaño (Bogotá tiene la cuarta parte de los casos). Es el mismo error de comparar conteos en vez de tasas." },
@@ -1787,11 +1837,14 @@ const MISIONES = [
       { q: "Repite solo con los departamentos que tienen suficientes casos. ¿Cuántos grupos tiene sentido pedir?",
         pista: "Quédate con los departamentos que superan tu mínimo, reconstruye el perfil y usa el método del codo. Ojo: mira bien la lista de departamentos; hay uno escrito de dos maneras. ¿Qué le hace eso a su perfil?",
         esq: "casos = vif[\"departamento\"].value_counts()\ngrandes = casos[casos >= ___].index\nv6g = v6[v6[\"departamento\"].isin(grandes)]\nperfil2 = pd.crosstab(v6g[\"departamento\"], v6g[\"agresor\"], normalize=\"index\")\ncodo(perfil2[agresores], k_max=6)",
+        huecos: [
+          { q: "¿Desde cuántos casos confías en el perfil de un departamento? Fíjate cuántos departamentos te quedan con cada mínimo.", op: ["20", "50", "100", "300"], info: (v) => { const c = state.data.vif.col("departamento").value_counts(); const n = c.values.filter((x) => x >= Number(v)).length; return `Quedan ${n} de ${c.length} departamentos.`; } } ],
         dato: { q: "¿Qué mínimo de casos usaste y por qué?", ph: "p. ej. 100, porque…" },
         dec: { q: "Según el codo y tu criterio, ¿con qué k te quedas?", abierta: true, fb: "No hay una única respuesta correcta. Defiende tu k en el veredicto: qué muestra el codo y si los grupos se pueden nombrar.", op: [{ t: "k = 2" }, { t: "k = 3" }, { t: "k = 4" }, { t: "k = 5 o más" }] } },
       { q: "Lee los centros y bautiza cada grupo.",
         pista: "La tabla de centros es el «retrato robot» de cada grupo: ¿en qué agresores está alto o bajo frente a los otros? Para ver qué departamentos quedaron en cada grupo, ordena perfil2 por la columna grupo.",
         esq: "m2 = kmeans(perfil2[agresores], k=___)\nperfil2[\"grupo\"] = m2.etiquetas\nm2",
+        huecos: [{ q: "¿Cuántos grupos? Usa el k que decidiste con el codo.", op: OP_K }],
         nota: { q: "Ponle nombre a cada grupo y escribe un departamento que lo represente." } },
     ],
     veredicto: "¿Qué le dirías a ICBF? ¿Cómo cambiaría el resultado con otras decisiones (otro mínimo de casos, otro k)?" },
@@ -1802,8 +1855,10 @@ const MISIONES = [
     prediccion: { q: "Antes de calcular: si cruzas las dos tipologías, ¿qué esperas?", op: ["Coinciden casi por completo", "Se parecen algo, pero no del todo", "No tienen nada que ver"] },
     pasos: [
       { q: "¿Qué variables describen el porqué?",
-        pista: "Abre la pestaña Datos → municipios y lee qué mide cada columna. Elige entre 2 y 4 que hablen del motivo o del contexto del hecho, no del arma ni del lugar.",
-        esq: "porque = [\"___\", \"___\"]\nmunicipios[porque].describe()",
+        pista: "Lee qué mide cada columna (debajo de cada nombre está su descripción; también en la pestaña Datos → municipios). Elige entre 2 y 4 que hablen del motivo o del contexto del hecho, no del arma ni del lugar. Si lo escribes tú: los nombres van entre comillas y separados por comas.",
+        esq: "porque = [___]\nmunicipios[porque].describe()",
+        huecos: [
+          { tipo: "lista", min: 2, max: 4, q: "Marca entre 2 y 4 columnas que describan el PORQUÉ (motivo o contexto), no el cómo.", op: ["casos", "pct_arma_fuego", "pct_mujeres", "pct_rural", "pct_noche", "pct_fin_semana", "pct_via_publica", "pct_vivienda", "pct_rina", "pct_ajuste_cuentas", "pct_sin_info_circunstancia", "edad_media", "pct_menores"] } ],
         dec: { q: "¿Meterías también «casos» o «pct_sin_info_circunstancia»?", op: [
           { t: "Sí, las dos: más variables, más información", ok: false, fb: "«casos» mide tamaño: separaría a Bogotá y Cali del resto por grandes, no por su motivo. «pct_sin_info_circunstancia» mide qué tan bien se llena el formulario, no por qué se mata." },
           { t: "Solo «casos», para que pesen más los municipios grandes", ok: false, fb: "K-means no pondera por tamaño: «casos» sería una dimensión más y separaría a las ciudades grandes. Quieres agrupar por motivo." },
@@ -1816,6 +1871,7 @@ const MISIONES = [
       { q: "Bautiza tus grupos.",
         pista: "Corre kmeans con tu k y guarda las etiquetas en una columna nueva. La tabla de centros dice en qué está alto o bajo cada grupo.",
         esq: "m_porque = kmeans(municipios[porque], k=___)\nmunicipios[\"grupo_porque\"] = m_porque.etiquetas\nm_porque",
+        huecos: [{ q: "¿Cuántos grupos? Usa el k que decidiste con el codo.", op: OP_K }],
         nota: { q: "Nombre de cada grupo (p. ej. «riñas de fin de semana»)." } },
       { q: "Antes de creerle a tus grupos: ¿se diferencian en algo que NO usaste?",
         pista: "Compara tus grupos en una variable que dejaste por fuera a propósito. Si un grupo tiene muchísimo «sin información», ¿sus porcentajes bajos de riña significan pocas riñas… o pocas riñas registradas?",
@@ -1826,6 +1882,9 @@ const MISIONES = [
       { q: "Ahora sí: ¿se parecen las dos tipologías?",
         pista: "Reconstruye la tipología del cómo con las seis variables de la clase y k = 3, cruza las dos columnas de grupos y pon a prueba la asociación. Mira la V de Cramér y las celdas con residuo mayor que +2.",
         esq: "como = [\"pct_arma_fuego\", \"pct_mujeres\", \"pct_rural\", \"pct_noche\", \"pct_via_publica\", \"edad_media\"]\nmunicipios[\"grupo_como\"] = kmeans(municipios[como], k=3).etiquetas\ncruce = pd.crosstab(municipios[\"___\"], municipios[\"___\"])\nchi_cuadrado(cruce)",
+        huecos: [
+          { q: "Filas: una de las dos tipologías.", op: [{ v: "departamento" }, { v: "grupo_porque", d: "Tus grupos según el porqué." }, { v: "grupo_como", d: "Los grupos según cómo ocurren los homicidios." }] },
+          { q: "Columnas: la otra tipología.", op: [{ v: "grupo_como", d: "Los grupos según cómo ocurren los homicidios." }, { v: "departamento" }, { v: "grupo_porque", d: "Tus grupos según el porqué." }] } ],
         nota: { q: "Anota la V de Cramér y qué combinación de grupos tiene un residuo mayor que +2." } },
       { opcional: true, q: "Opcional: mira tu tipología en dos dimensiones con PCA.",
         pista: "Funciona mejor si elegiste 3 o 4 variables. Lee las cargas: ¿qué significa moverse a la derecha en PC1 con TUS variables?",
@@ -1941,7 +2000,7 @@ const REFERENCIA = [
   ["Contar", [["df[\"col\"].value_counts()", "frecuencias"], ["df[\"col\"].value_counts(normalize=True)", "proporciones"], ["df[\"col\"].nunique()", "valores distintos"], ["df[\"col\"].mean()", "promedio (también median, std, min, max, sum)"]]],
   ["Filtrar", [["df[df[\"col\"] == \"valor\"]", "igual a"], ["df[(df[\"a\"] > 10) & (df[\"b\"] == \"x\")]", "y lógico (| es o, ~ es no)"], ["df[df[\"col\"].isin([\"a\", \"b\"])]", "está en la lista"], ["df[df[\"col\"].str.contains(\"texto\")]", "contiene texto"], ["df[\"nueva\"] = df[\"a\"] == \"x\"", "crear columna lógica"]]],
   ["Agrupar y cruzar", [["df.groupby(\"g\")[\"v\"].mean()", "promedio por grupo"], ["df.groupby(\"g\").size()", "conteo por grupo"], ["df.groupby(\"g\")[\"v\"].agg([\"mean\", \"count\"])", "varias funciones"], ["pd.crosstab(df[\"a\"], df[\"b\"])", "tabla cruzada"], ["pd.crosstab(df[\"a\"], df[\"b\"], normalize=\"index\")", "% por fila"], ["df.sort_values(\"col\", ascending=False)", "ordenar"], ["pd.cut(df[\"edad_aprox\"], bins=[0, 17, 29, 59, 120], labels=[\"menor\", \"joven\", \"adulto\", \"mayor\"])", "agrupar números en rangos"]]],
-  ["Graficar", [["grafico_barras(serie, horizontal=True, titulo=\"...\")", "barras"], ["grafico_lineas(serie)", "líneas"], ["histograma(df[\"edad_aprox\"], bins=20)", "histograma"], ["mapa_calor(tabla_cruzada)", "mapa de calor"], ["dispersion(df, x=\"a\", y=\"b\", color=\"g\", tendencia=True)", "dispersión"], ["cajas(df, valor=\"v\", grupo=\"g\")", "diagrama de cajas"], ["serie.plot(kind=\"bar\")", "estilo pandas: bar, barh, line, pie, hist"]]],
+  ["Graficar", [["grafico_barras(serie, horizontal=True, titulo=\"...\")", "barras"], ["grafico_lineas(serie)", "líneas"], ["histograma(df[\"edad_aprox\"], bins=20)", "histograma"], ["mapa_calor(tabla_cruzada)", "mapa de calor"], ["mapa_calor(tabla_cruzada, normalize=\"index\")", "mapa de calor en % por fila (o \"columns\", \"all\")"], ["dispersion(df, x=\"a\", y=\"b\", color=\"g\", tendencia=True)", "dispersión"], ["cajas(df, valor=\"v\", grupo=\"g\")", "diagrama de cajas"], ["serie.plot(kind=\"bar\")", "estilo pandas: bar, barh, line, pie, hist"]]],
   ["Pruebas", [["prueba_t(grupo1, grupo2)", "comparar dos medias"], ["anova(df, valor=\"v\", grupo=\"g\")", "comparar varias medias"], ["chi_cuadrado(tabla_cruzada)", "asociación entre categorías"], ["correlacion(df[\"a\"], df[\"b\"])", "r de Pearson"], ["intervalo_confianza(serie)", "IC 95 %"], ["tasa(conteo, poblacion, por=100000)", "tasas"]]],
   ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
 ];
@@ -2098,7 +2157,7 @@ function loadNotebook() {
 }
 function starterCells(s) {
   const first = ["# Bienvenido al laboratorio. Cada celda es Python real (pandas simplificado).\n# Ejecuta con el botón ▶ o con Shift+Enter. Las bases ya están cargadas:\n# homicidios, vif, policia, diarios, municipios, departamentos\nhomicidios.head()"];
-  const bySession = { 1: ["homicidios.shape", "homicidios[\"sexo_victima\"].value_counts()"], 2: ["diarios.head()", "diarios.groupby(\"dia_semana\")[\"homicidios\"].mean().round(1)"], 3: ["# Sesión 3: las pistas ya no traen el código completo.\n# Traen esqueletos con espacios ___ : tú decides qué va en cada uno.\n# Los nombres de las columnas están en la pestaña «Datos».\nmunicipios.head()"], 4: ["regresion_lineal(diarios, y=\"homicidios\", x=[\"t\", \"fin_de_semana\"])"], 5: ["vif[\"agresor_hombre\"] = vif[\"sexo_agresor\"] == \"Hombre\"\narbol_decision(vif, y=\"agresor_hombre\", x=[\"sexo_victima\", \"edad_aprox\", \"tipo_violencia\"], profundidad=3)"] };
+  const bySession = { 1: ["homicidios.shape", "homicidios[\"sexo_victima\"].value_counts()"], 2: ["diarios.head()", "diarios.groupby(\"dia_semana\")[\"homicidios\"].mean().round(1)"], 3: ["# Sesión 3: en cada paso del expediente armas el código eligiendo qué va en cada espacio.\n# «Llevar al cuaderno y ejecutar» lo trae aquí. Luego miras el resultado y decides.\nmunicipios.head()"], 4: ["regresion_lineal(diarios, y=\"homicidios\", x=[\"t\", \"fin_de_semana\"])"], 5: ["vif[\"agresor_hombre\"] = vif[\"sexo_agresor\"] == \"Hombre\"\narbol_decision(vif, y=\"agresor_hombre\", x=[\"sexo_victima\", \"edad_aprox\", \"tipo_violencia\"], profundidad=3)"] };
   return [...first, ...(bySession[s] || []), ""];
 }
 function insertCode(code, run = false) {
@@ -2156,7 +2215,7 @@ function renderMisiones() {
   const misiones = MISIONES.filter((x) => x.sesion === state.sesion); const nuevo = misiones.some((m) => m.pasos);
   const head = hEl("div", "ses-head"); head.style.setProperty("--ses", s.color); head.append(hEl("div", "n", `Sesión ${s.n} de ${SESIONES.length}`), hEl("h2", null, s.titulo), hEl("p", null, s.sub)); p.append(head);
   const intro = hEl("p", "intro-exp", nuevo
-    ? "Cada expediente plantea una hipótesis. Primero apuestas; luego investigas paso a paso. Las pistas traen esqueletos con espacios ___ que tú decides cómo llenar, y algunos pasos piden una decisión o un número de tu resultado para seguir."
+    ? "Cada expediente plantea una hipótesis. Primero apuestas; luego investigas paso a paso. En cada paso armas el código eligiendo qué va en cada espacio (no tienes que escribirlo), lo ejecutas y miras el resultado. Algunos pasos piden una decisión o un número de tu resultado para seguir."
     : "Cada expediente plantea una hipótesis. Usa las pistas (insertan código en el cuaderno), ejecútalo y escribe tu veredicto.");
   p.append(intro);
   for (const m of misiones) {
@@ -2221,10 +2280,11 @@ function renderExpediente(m, body, d) {
     const ph = hEl("div", "ph"); ph.append(hEl("span", "k", String(i + 1)), hEl("span", "q", p.q)); if (hecho && gatesOf(p).length) ph.append(hEl("span", "ok", "✓")); card.append(ph);
     const inner = hEl("div", "inner"); const tools = hEl("div", "tools");
     if (p.pista) { const b = hBtn(ps.pista ? "Ocultar pista" : "Ver pista"); b.onclick = () => { ps.pista = !ps.pista; save(); redraw(); }; tools.append(b); }
-    if (p.esq) { const b = hBtn("Insertar esqueleto"); b.title = "Inserta el código con espacios ___ que debes completar"; b.onclick = () => { ps.esq = (ps.esq || 0) + 1; save(); insertCode(p.esq); }; tools.append(b); }
+    if (p.esq && !p.huecos) { const conHuecos = /___/.test(p.esq); const b = hBtn(conHuecos ? "Insertar esqueleto" : "Insertar código"); b.title = conHuecos ? "Inserta el código con espacios ___ que debes completar" : "Inserta el código en el cuaderno"; b.onclick = () => { ps.esq = (ps.esq || 0) + 1; save(); insertCode(p.esq); }; tools.append(b); }
     if (p.codigo) { const b = hBtn("Insertar código del colega"); b.onclick = () => insertCode(p.codigo); tools.append(b); }
     inner.append(tools);
     if (p.pista && ps.pista) inner.append(hEl("div", "pista-txt", p.pista));
+    if (p.huecos) inner.append(renderArmador(m, p, i, ps, save));
     for (const g of gatesOf(p)) {
       const box = renderGate(m, p, ps, g, save, redraw); inner.append(box);
       if (!gateOk(p, ps, g)) break; // la siguiente compuerta del paso aparece al resolver esta
@@ -2253,6 +2313,59 @@ function renderExpediente(m, body, d) {
   v.append(row);
   if (st.done) { const c = hEl("div", "fb neutral"); c.append(hEl("b", null, "Predijiste: "), document.createTextNode(m.prediccion.op[st.pred] + ". "), hEl("b", null, "Concluiste: "), document.createTextNode((VER_OPC[ver.d] || "").toLowerCase() + ". "), document.createTextNode("Si cambiaste de idea, ¿qué evidencia te hizo cambiar?")); v.append(c); }
   body.append(v);
+}
+
+/* ---------- Armador: el estudiante elige qué va en cada espacio ___ (sin teclear código) ---------- */
+const NUMS = ["①", "②", "③", "④", "⑤", "⑥"];
+const celdasPaso = new Map();
+const opcionesHueco = (h) => h.op.map((o) => (typeof o === "string" ? { v: o } : o));
+function descOpcion(h, o) { if (o.d) return o.d; if (h.info) { try { return h.info(o.v); } catch { return ""; } } return DICCIONARIO[o.v] || ""; }
+const huecoLleno = (h, v) => (h && h.tipo === "lista" ? Array.isArray(v) && v.length >= (h.min || 1) : v !== undefined && v !== null);
+const textoHueco = (h, v) => (h && h.tipo === "lista" ? v.map((x) => `"${x}"`).join(", ") : String(v));
+function armarCodigo(esq, huecos, el) { let k = 0; return esq.replace(/___/g, () => { const h = huecos[k], v = el[k]; k++; return v !== undefined && v !== null && !(Array.isArray(v) && !v.length) ? textoHueco(h, v) : "___"; }); }
+function llevarAlCuaderno(clave, esq, code) {
+  const patron = new RegExp("^" + esq.split("___").map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s\\S]*?") + "$");
+  let cell = celdasPaso.get(clave);
+  if (!cell || !state.cells.includes(cell) || !patron.test(cell.ta.value.trim())) cell = state.cells.find((c) => patron.test(c.ta.value.trim()));
+  if (!cell) { const ult = state.cells[state.cells.length - 1]; cell = ult && !ult.ta.value.trim() ? ult : createCell(""); }
+  celdasPaso.set(clave, cell);
+  cell.ta.value = code; cell.ta.dispatchEvent(new Event("input")); runCell(cell);
+  cell.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (window.innerWidth <= 860) collapseSide(true);
+}
+function renderArmador(m, p, i, ps, save) {
+  const box = hEl("div", "armar"); ps.hz = ps.hz || []; const el = ps.hz;
+  const draw = () => {
+    box.innerHTML = "";
+    box.append(hEl("div", "gt", "Arma el código: elige qué va en cada espacio"));
+    const pre = hEl("pre", "code armar-pre"); const partes = p.esq.split("___");
+    partes.forEach((t, k) => { pre.append(document.createTextNode(t)); if (k < partes.length - 1) { const h = p.huecos[k]; const v = el[k]; const ok = v !== undefined && v !== null && !(Array.isArray(v) && !v.length); pre.append(hEl("span", "hueco" + (ok ? " lleno" : ""), ok ? textoHueco(h, v) : " " + (NUMS[k] || "?") + " ")); } });
+    box.append(pre);
+    p.huecos.forEach((h, k) => {
+      const fila = hEl("div", "hueco-fila"); fila.append(hEl("div", "hq", `${NUMS[k] || ""} ${h.q}`));
+      const chips = hEl("div", "chips"); chips.setAttribute("role", "group"); chips.setAttribute("aria-label", h.q);
+      for (const o of opcionesHueco(h)) {
+        const on = h.tipo === "lista" ? (el[k] || []).includes(o.v) : el[k] === o.v;
+        const b = hEl("button", "chip" + (on ? " on" : "")); b.type = "button"; b.setAttribute("aria-pressed", String(on));
+        b.append(hEl("b", null, o.t || o.v)); const d = descOpcion(h, o); if (d) b.append(hEl("small", null, d));
+        b.onclick = () => {
+          if (h.tipo === "lista") { const arr = [...(el[k] || [])]; const j = arr.indexOf(o.v); if (j >= 0) arr.splice(j, 1); else { if (h.max && arr.length >= h.max) { aviso(fila, `Máximo ${h.max}: quita una antes de agregar otra.`, "neutral"); return; } arr.push(o.v); } el[k] = arr; }
+          else el[k] = o.v;
+          save(); draw();
+        };
+        chips.append(b);
+      }
+      fila.append(chips);
+      if (h.tipo === "lista") fila.append(hEl("div", "small-note", `Llevas ${(el[k] || []).length}${h.max ? " de máximo " + h.max : ""}.`));
+      box.append(fila);
+    });
+    const acc = hEl("div", "armar-acc");
+    const go = hBtn("Llevar al cuaderno y ejecutar", "primary");
+    go.onclick = () => { const falta = p.huecos.findIndex((h, k) => !huecoLleno(h, el[k])); if (falta >= 0) { const h = p.huecos[falta]; aviso(box, `Te falta el espacio ${NUMS[falta] || ""}` + (h.tipo === "lista" && h.min ? ` (elige al menos ${h.min}).` : "."), "neutral"); return; } ps.armado = (ps.armado || 0) + 1; save(); llevarAlCuaderno(`${m.id}:${i}`, p.esq, armarCodigo(p.esq, p.huecos, el)); };
+    const yo = hBtn("Prefiero escribirlo yo"); yo.title = "Inserta el esqueleto con espacios ___ para llenarlos tecleando"; yo.onclick = () => { ps.esq = (ps.esq || 0) + 1; save(); insertCode(p.esq); };
+    acc.append(go, yo); box.append(acc);
+  };
+  draw(); return box;
 }
 
 function renderGate(m, p, ps, g, save, redraw) {
@@ -2421,7 +2534,7 @@ const LANG_REF = () => `Este laboratorio ejecuta un SUBCONJUNTO de Python/pandas
 PROHIBIDO (aquí no existe): importar librerías (sklearn, matplotlib, seaborn, scipy, statsmodels, plotly…; "import pandas as pd" se ignora y no hace falta), plt.* o sns.*, for, while, if como instrucción, def, lambda, listas por comprensión, .apply, .map con funciones, .iterrows, .query, .iloc/.loc con listas de posiciones, merge complejos. No uses nombres de ejemplo como df o data: usa siempre la base real o una tabla que el estudiante ya creó. No inventes funciones ni atributos: usa solo los de esta lista.
 - Disponibles: df.head/tail/sample/shape/columns/info/describe/value_counts(normalize=)/groupby(col)[col].mean|sum|count|size|median|agg([...])/sort_values(col, ascending=)/isin/str.contains/between/astype/round/corr/nlargest/reset_index/set_index/fillna/dropna/copy/pd.crosstab(a, b, normalize="index"|"columns"|"all")/pd.cut(serie, bins=[...], labels=[...]).
 - Filtros: df[(df["a"] == "x") & (df["b"] > 1)]; crear columnas: df["nueva"] = df["a"] == "x"; filtrar una serie de conteos: conteo[conteo > 100]; sus etiquetas: conteo[conteo > 100].index; leer una celda de una tabla cruzada: tabla["columna"]["fila"].
-- Gráficas: grafico_barras(serie, horizontal=True, titulo=""), grafico_lineas(serie), histograma(serie, bins=), mapa_calor(tabla_cruzada), dispersion(df, x=, y=, color=, etiquetas=, tendencia=True), cajas(df, valor=, grupo=), serie.plot(kind="bar").
+- Gráficas: grafico_barras(serie, horizontal=True, titulo=""), grafico_lineas(serie), histograma(serie, bins=), mapa_calor(tabla_cruzada, normalize="index"|"columns"|"all"), dispersion(df, x=, y=, color=, etiquetas=, tendencia=True), cajas(df, valor=, grupo=), serie.plot(kind="bar").
 - Estadística: prueba_t(s1, s2, nombres=[..]), anova(df, valor=, grupo=), chi_cuadrado(tabla) → .v_cramer .residuos, correlacion(s1, s2), intervalo_confianza(serie), tasa(conteo, poblacion, por=100000).
 - Modelos (ya estandarizan y ya separan entrenamiento/prueba: no lo hagas a mano). Usa SOLO estos atributos:
   kmeans(tabla[[cols]], k=3) → .etiquetas .centros .inercia (guardar grupos: tabla["grupo"] = resultado.etiquetas)
