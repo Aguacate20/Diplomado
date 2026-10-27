@@ -29,16 +29,21 @@ Proyecto → **Settings → Environment Variables**:
 | `CLAVE_CLASE` | no | si la defines, los estudiantes deben escribirla una vez (pestaña «Analista IA») para usar la IA; evita que desconocidos gasten tus créditos |
 | `NVIDIA_MODEL` | no | fuerza un modelo concreto. Si no se define, el servidor consulta los modelos disponibles de tu clave y elige uno solo (NVIDIA retira modelos con frecuencia y responden «410 Gone»; si el elegido muere, pasa al siguiente) |
 | `NVIDIA_MODEL_QUICK` | no | igual, para las explicaciones rápidas («¿Qué hace?») |
-| `LIMITE_POR_MINUTO` | no | consultas de IA por minuto por persona (15) |
-| `LIMITE_POR_DIA` | no | consultas de IA por día para toda la clase (1500) |
+| `LIMITE_POR_MINUTO` | no | consultas de IA por minuto por estudiante (20; se cuenta por dispositivo, no por IP) |
+| `LIMITE_POR_MINUTO_RED` | no | consultas de IA por minuto desde una misma red, p. ej. el wifi del salón (200) |
+| `LIMITE_POR_DIA` | no | consultas de IA por día para toda la clase (3000; cada pregunta puede gastar 2 o 3 si la IA tiene que corregir su código) |
 
 Después de guardar variables, haz **Redeploy** (Deployments → ⋯ → Redeploy) para que apliquen.
 
 ### 5. Probar
 - `https://tu-proyecto.vercel.app/api/modelos` muestra qué modelos tiene tu clave y cuáles usará el laboratorio (útil si la IA da error).
+  Con `?probar=1&clave=TU_CLAVE_PROFESOR` además le hace una pregunta de prueba a cada modelo candidato y muestra cuánto tarda y qué responde. Si un modelo falla, tarda más de 25 s o responde vacío, el servidor lo deja «en pausa» unos minutos y usa el siguiente (aparece en `en_pausa`).
 - Abre `https://tu-proyecto.vercel.app` → pestaña **Analista IA** debe mostrar el chat (si falta la clave, muestra un aviso).
 - Escribe un nombre en «Tu nombre o código», un veredicto, y pulsa **Enviar al profesor**.
 - Pulsa el botón **Profesor** (arriba, junto a las sesiones), escribe `CLAVE_PROFESOR` → debe aparecer el veredicto. **Descargar CSV** baja el historial completo. (También existe `/profesor.html` como página aparte.)
+
+## Cómo se cuida que el código de la IA funcione
+El laboratorio no es Python completo (no hay sklearn, matplotlib, for, etc.). Por eso, antes de mostrar una respuesta, el navegador **ejecuta cada bloque de código de la IA en una copia del cuaderno**. Si falla, le devuelve el error a la IA para que lo corrija (hasta 2 veces) y marca cada bloque con «✓ probado en el laboratorio», «esqueleto: llena los espacios ___» o «⚠ no funcionó aquí» con el motivo. Los datos reales del estudiante no se modifican durante la prueba.
 
 ## Cómo se identifica a cada estudiante
 No se usa la dirección IP: en el wifi de un salón todos comparten la misma, y los celulares la cambian a cada rato. En su lugar:

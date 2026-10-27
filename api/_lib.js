@@ -48,8 +48,20 @@ async function limitar(clave, n, ventana) {
   return c <= n;
 }
 
+// Marcas con caducidad (p. ej. «este modelo falló hace poco»): Redis si existe, memoria si no.
+const marcasMem = new Map();
+async function marcar(clave, segundos, valor = "1") {
+  if (hasRedis()) { try { await redis("SET", "m:" + clave, valor, "EX", Math.max(1, Math.round(segundos))); } catch {} return; }
+  marcasMem.set(clave, { valor, hasta: Date.now() + segundos * 1000 });
+}
+async function marcadas(claves) {
+  if (!claves.length) return [];
+  if (hasRedis()) { try { return await redis("MGET", ...claves.map((k) => "m:" + k)); } catch { return claves.map(() => null); } }
+  return claves.map((k) => { const m = marcasMem.get(k); return m && m.hasta > Date.now() ? m.valor : null; });
+}
+
 function ip(req) { return (req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "?").toString().split(",")[0].trim(); }
 function body(req) { if (!req.body) return {}; if (typeof req.body === "string") { try { return JSON.parse(req.body); } catch { return {}; } } return req.body; }
 function cors(res) { res.setHeader("Access-Control-Allow-Origin", "*"); res.setHeader("Access-Control-Allow-Headers", "Content-Type"); res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS"); }
 
-module.exports = { hasRedis, guardarVeredicto, listarVeredictos, limitar, ip, body, cors };
+module.exports = { hasRedis, guardarVeredicto, listarVeredictos, limitar, marcar, marcadas, ip, body, cors };

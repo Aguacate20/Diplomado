@@ -191,6 +191,14 @@ table.df td.txt { text-align: left; }
 .vered-box.locked { opacity: .7; }
 .acciones { display: flex; gap: 6px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
 .vered-box .opts label { font-family: var(--font); text-transform: none; letter-spacing: normal; font-size: 13.5px; color: var(--ink); margin-top: 0; display: flex; }
+.ai-code-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 4px; }
+.ai-code-head .btn { margin: 0; }
+.ia-badge { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ia-badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+.ia-badge.esqueleto { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.ia-badge.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.ia-aviso { font-size: 12.5px; color: var(--danger); margin: 2px 0 8px; }
+.ia-estado { font-size: 12.5px; color: var(--muted); margin-top: 8px; font-style: italic; }
 </style>
 <div class="app">
   <header class="topbar">
@@ -233,7 +241,7 @@ class LabError extends Error { constructor(msg, hint) { super(msg); this.hint = 
 const KEYWORDS = new Set(["True", "False", "None", "and", "or", "not", "in", "is", "for", "if", "else", "import", "as", "from", "def", "lambda", "while", "return"]);
 
 function tokenize(src) {
-  const toks = []; let i = 0; let depth = 0; let line = 1;
+  const toks = []; let i = 0; let depth = 0; let line = 1; let fpend = false;
   const push = (t, v) => toks.push({ t, v, line });
   while (i < src.length) {
     const c = src[i];
@@ -255,13 +263,12 @@ function tokenize(src) {
         s += src[j]; j++;
       }
       if (j >= src.length) throw new LabError(`Cadena de texto sin cerrar en la línea ${line}.`, "Revisa que cada comilla de apertura tenga su comilla de cierre.");
-      // f-strings not supported; prefix letters before quote
-      push("STR", s); i = j + q.length; continue;
+      push(fpend ? "FSTR" : "STR", s); fpend = false; i = j + q.length; continue;
     }
     if (/[A-Za-z_À-ɏ]/.test(c)) {
       let j = i; while (j < src.length && /[A-Za-z0-9_À-ɏ]/.test(src[j])) j++;
       let w = src.slice(i, j);
-      if ((w === "f" || w === "r" || w === "b") && (src[j] === '"' || src[j] === "'")) { i = j; continue; }
+      if (/^[fFrRbB]{1,2}$/.test(w) && (src[j] === '"' || src[j] === "'")) { fpend = /f/i.test(w); i = j; continue; }
       push(KEYWORDS.has(w) ? "KW" : "NAME", w); i = j; continue;
     }
     const three = src.slice(i, i + 3), two = src.slice(i, i + 2);
@@ -299,8 +306,8 @@ class Parser {
   parseStatement() {
     const k = this.peek();
     if (k.t === "KW" && (k.v === "import" || k.v === "from")) { // import pandas as pd -> ignore
-      while (!this.at("NL") && !this.at("EOF")) this.next();
-      return { type: "import", line: k.line };
+      const ws = []; while (!this.at("NL") && !this.at("EOF")) ws.push(this.next().v);
+      return { type: "import", line: k.line, mod: String(ws[1] || "") };
     }
     if (k.t === "KW" && ["for", "if", "while", "def", "lambda", "return"].includes(k.v)) {
       throw new LabError(`En este laboratorio no usamos «${k.v}»: todo se resuelve con operaciones de pandas sobre tablas completas.`, "Prueba con filtros (df[df[\"col\"] == valor]), groupby o value_counts.");
@@ -385,6 +392,7 @@ class Parser {
   parsePrimary() {
     const k = this.next();
     if (k.t === "NUM") return { type: "num", v: k.v };
+    if (k.t === "FSTR" || (k.t === "STR" && this.at("FSTR"))) { const parts = []; let t = k; for (;;) { if (t.t === "FSTR") parts.push(...parseFString(t.v, t.line)); else parts.push(t.v); if (this.at("STR") || this.at("FSTR")) t = this.next(); else break; } return { type: "fstr", parts }; }
     if (k.t === "STR") { let s = k.v; while (this.at("STR")) s += this.next().v; return { type: "str", v: s }; }
     if (k.t === "NAME") return { type: "name", v: k.v, line: k.line };
     if (k.t === "KW") {
@@ -828,7 +836,7 @@ class Interpreter {
     const stmts = parseProgram(src);
     let last = undefined;
     for (const st of stmts) {
-      if (st.type === "import") continue;
+      if (st.type === "import") { const raiz = st.mod.split(".")[0]; if (raiz && !["pandas", "numpy"].includes(raiz)) this.output.push(`Aviso (línea ${st.line}): aquí no hay otras librerías («${st.mod}»), así que esa línea se ignoró. ${Object.hasOwn(LIB_HINT, raiz) ? LIB_HINT[raiz] : "Todo lo necesario ya está cargado: pd, np y las funciones de la pestaña «Códigos»."}`); continue; }
       if (st.type === "assign") { this.assign(st); last = undefined; continue; }
       last = this.eval(st.expr);
     }
@@ -846,13 +854,22 @@ class Interpreter {
       if (Array.isArray(obj)) { obj[key] = value; return; }
       throw new LabError(`No puedo asignar dentro de un valor de tipo ${typeName(obj)}.`);
     }
+    if (t.type === "attr") {
+      const obj = this.eval(t.obj);
+      if (obj instanceof DataFrame && t.name === "columns") { const nuevos = value instanceof Series ? value.values : value; if (!Array.isArray(nuevos) || nuevos.length !== obj.columns.length) throw new LabError(`Para renombrar las columnas escribe una lista con ${obj.columns.length} nombres, en el mismo orden.`, `Columnas actuales: ${obj.columns.join(", ")}`); const d = {}; obj.columns.forEach((c, i) => { d[String(nuevos[i])] = obj.data[c]; }); obj.data = d; obj.columns = nuevos.map(String); return; }
+      if (obj instanceof Series && t.name === "name") { obj.name = value; return; }
+      if (obj instanceof DataFrame && t.name === "index") throw new LabError("Aquí no se cambia el índice asignándolo.", "Usa tabla = tabla.set_index(\"columna\") o tabla = tabla.reset_index().");
+      throw new LabError(`No se puede cambiar «.${t.name}» asignándolo directamente.`, "Crea una tabla nueva, p. ej. nueva = tabla.rename(columns={\"viejo\": \"nuevo\"}).");
+    }
     throw new LabError("Asignación no soportada.", "Usa nombre = valor o tabla[\"columna\"] = valor.");
   }
   eval(e) {
     switch (e.type) {
       case "num": return e.v; case "str": return e.v; case "const": return e.v;
+      case "fstr": return e.parts.map((p) => typeof p === "string" ? p : formatSpec(this.eval(p.expr), p.spec)).join("");
       case "name": {
         if (this.globals.has(e.v)) return this.globals.get(e.v);
+        if (Object.hasOwn(NAME_HINT, e.v)) throw new LabError(`«${e.v}» no existe en este laboratorio (línea ${e.line}).`, NAME_HINT[e.v]);
         const sug = closest(e.v, [...this.globals.keys()].filter((k) => !k.startsWith("_")));
         throw new LabError(`El nombre «${e.v}» no existe (línea ${e.line}).`, sug ? `¿Quisiste decir «${sug}»?` : "¿Lo definiste en una celda anterior y ya la ejecutaste? Recuerda que las cadenas de texto van entre comillas.");
       }
@@ -897,12 +914,18 @@ class Interpreter {
     }
     if (obj instanceof GroupBy) { const key = this.eval(idxNode); if (typeof key === "string") return obj.column(key); if (Array.isArray(key)) return new GroupBy(obj.df.select([...obj.keys, ...key.filter((k) => !obj.keys.includes(k))]), obj.keys); throw new LabError("Después de groupby indica una columna entre corchetes.", "Ejemplo: df.groupby(\"zona\")[\"edad_aprox\"].mean()"); }
     if (obj && obj.kind === "loc") {
-      const df = obj.df;
-      if (idxNode.type === "tuple") { const [r, c] = idxNode.items; const rows = this.eval(r); const cols = this.eval(c); let sub = rows instanceof Series ? df.filter(rows.values) : rows instanceof Slice ? df.iloc_slice(rows.lo, rows.hi) : df; return typeof cols === "string" ? sub.col(cols) : sub.select(cols); }
-      const rows = this.eval(idxNode);
-      if (rows instanceof Series) return df.filter(rows.values); if (rows instanceof Slice) return df.iloc_slice(rows.lo, rows.hi);
-      if (typeof rows === "number") return df.iloc_slice(rows, rows + 1);
-      throw new LabError("loc/iloc: usa un filtro o un rango, p. ej. df.iloc[0:10].");
+      const df = obj.df; const uno = (r) => typeof r === "string" || typeof r === "number";
+      const pick = (rows) => rows instanceof Series ? (rows.type === "lógico" ? df.filter(rows.values) : locLabels(df, rows.values)) : rows instanceof Slice ? df.iloc_slice(rows.lo, rows.hi) : Array.isArray(rows) ? (rows.length && rows.every((x) => typeof x === "boolean") ? df.filter(rows) : locLabels(df, rows)) : typeof rows === "string" ? locLabels(df, [rows]) : typeof rows === "number" ? (!obj.iloc && df.index.includes(rows) ? locLabels(df, [rows]) : df.iloc_slice(rows, rows + 1)) : null;
+      if (idxNode.type === "tuple") {
+        const [r, c] = idxNode.items; const rows = this.eval(r); let cols = this.eval(c); const sub = pick(rows) || df;
+        if (cols instanceof Slice) cols = df.columns.slice(cols.lo ?? 0, cols.hi ?? df.columns.length); else if (typeof cols === "number") cols = df.columns[cols]; else if (Array.isArray(cols)) cols = cols.map((x) => typeof x === "number" ? df.columns[x] : x);
+        if (typeof cols === "string") { const s = sub.col(cols); return uno(rows) ? s.values[0] : s; }
+        return sub.select(cols);
+      }
+      const rows = this.eval(idxNode); const res = pick(rows);
+      if (!res) throw new LabError("loc/iloc: usa un filtro, una etiqueta, una lista de etiquetas o un rango.", "Ejemplos: tabla.loc[\"Antioquia\"], tabla.loc[[\"Antioquia\", \"Valle\"]], tabla.iloc[0:10].");
+      if (obj.s) { const s = res.col(res.columns[0]); return uno(rows) ? s.values[0] : s; }
+      return res;
     }
     const key = this.eval(idxNode);
     if (Array.isArray(obj)) { if (key instanceof Slice) return obj.slice(key.lo ?? 0, key.hi ?? obj.length); const i = key < 0 ? obj.length + key : key; if (i >= obj.length) throw new LabError(`La lista tiene ${obj.length} elementos; no existe la posición ${key}.`); return obj[i]; }
@@ -945,7 +968,7 @@ function dfAttr(df, name, e) {
   switch (name) {
     case "shape": return new PyTuple(df.shape); case "columns": return [...df.columns]; case "index": return [...df.index];
     case "dtypes": return df.dtypes(); case "T": return df.T(); case "values": return df.toRows().map((r) => df.columns.map((c) => r[c]));
-    case "loc": case "iloc": return { kind: "loc", df };
+    case "loc": case "iloc": return { kind: "loc", df, iloc: name === "iloc" };
     case "plot": return plotAccessor(df);
     case "head": return M("head", ([n]) => df.head(n ?? 5)); case "tail": return M("tail", ([n]) => df.tail(n ?? 5));
     case "sample": return M("sample", ([n], kw) => df.sample(n ?? kw.n ?? 5, kw));
@@ -976,7 +999,7 @@ function dfAttr(df, name, e) {
 function seriesAttr(s, name, e) {
   switch (name) {
     case "values": return [...s.values]; case "index": return [...s.index]; case "name": return s.name; case "shape": return new PyTuple([s.length]); case "dtype": return s.type; case "size": return s.length;
-    case "str": return s.str; case "plot": return plotAccessor(s); case "loc": case "iloc": return { kind: "loc", df: s.to_frame() };
+    case "str": return s.str; case "plot": return plotAccessor(s); case "loc": case "iloc": return { kind: "loc", df: s.to_frame(), s, iloc: name === "iloc" };
     case "head": return M("head", ([n]) => s.head(n ?? 5)); case "tail": return M("tail", ([n]) => s.tail(n ?? 5));
     case "value_counts": return M("value_counts", (a, kw) => s.value_counts(kw));
     case "mean": case "median": case "std": case "var": case "min": case "max": case "sum": case "count": case "nunique": case "unique": case "idxmax": case "idxmin": case "cumsum": case "diff": case "dropna": case "isna": case "notna": case "describe": case "to_list": case "tolist":
@@ -1371,7 +1394,7 @@ function arbol_decision(df, kw = {}) {
   let rows, interp, fields;
   if (isNumY) { const ev = (idx) => { const errs = idx.map((i) => Math.abs(treePredict(tree, X[i]).value - t.yv[i])); const m = mean(idx.map((i) => t.yv[i])); const sse = idx.reduce((s, i) => s + (treePredict(tree, X[i]).value - t.yv[i]) ** 2, 0), sst = idx.reduce((s, i) => s + (t.yv[i] - m) ** 2, 0); return { mae: mean(errs), r2: 1 - sse / sst }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value); rows = [["Profundidad", maxDepth], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = `El árbol parte los datos con preguntas sí/no. Si el R² de entrenamiento es mucho mayor que el de prueba, el árbol memorizó (sobreajuste): baja la profundidad.`; }
   else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = treePredict(tree, X[i]).value; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value ? t.positive : (t.negative || "False")); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Profundidad", maxDepth], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; interp = `Lee el árbol de arriba abajo como un interrogatorio: cada pregunta divide los casos. Compara la exactitud con la del modelo que siempre dice la clase mayoritaria (${fmtNum(base * 100, 1)} %). Si entrenamiento ≫ prueba, el árbol memorizó: baja la profundidad.`; fields.matriz = b.cm; }
-  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz ? [{ type: "table", df: fields.matriz, caption: "Matriz de confusión (prueba)" }] : []));
+  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz_confusion ? [{ type: "table", df: fields.matriz_confusion, caption: "Matriz de confusión (prueba)" }] : []));
 }
 function bosque_aleatorio(df, kw = {}) {
   const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const nTrees = kw.arboles ?? kw.n_estimators ?? 40; const maxDepth = kw.profundidad ?? 6; const prueba = kw.prueba ?? 0.3; const minLeaf = kw.min_hojas ?? 10;
@@ -1943,7 +1966,7 @@ function makeGlobals() {
   g.set("np", new PyModule("np", { mean: new PyFunc("mean", ([a]) => mean(a instanceof Series ? a.numeric() : a)), sqrt: new PyFunc("sqrt", ([a]) => a instanceof Series ? a.map((v) => isNum(v) ? Math.sqrt(v) : v) : Math.sqrt(a)), log: new PyFunc("log", ([a]) => a instanceof Series ? a.map((v) => isNum(v) ? Math.log(v) : v) : Math.log(a)), round: new PyFunc("round", ([a, n]) => a instanceof Series ? a.round(n ?? 0) : Math.round(a * 10 ** (n ?? 0)) / 10 ** (n ?? 0)), where: new PyFunc("where", ([c, a, b]) => c.map((v, i) => v ? (a instanceof Series ? a.values[i] : a) : (b instanceof Series ? b.values[i] : b))), nan: NaN, pi: Math.PI }));
   const cargar = (f) => { const key = String(f).replace(/\.csv$/, "").replace(/^data\//, ""); const alias = { homicidios_ml: "homicidios", violencia_intrafamiliar: "vif", homicidios_policia: "policia", homicidios_diarios: "diarios", perfil_municipios: "municipios" }; const n = alias[key] || key; if (!state.data[n]) throw new LabError(`No existe una base llamada «${f}».`, `Disponibles: ${DATASETS.map((d) => d.name).join(", ")}`); return state.data[n].copy(); };
   fn("cargar", ([f]) => cargar(f)); fn("read_csv", ([f]) => cargar(f));
-  fn("print", (args, kw, interp) => { interp.output.push(args.map((a) => toText(a)).join(kw.sep ?? " ")); return null; });
+  fn("print", (args, kw, interp) => { const rico = (a) => a instanceof DataFrame || a instanceof Series || a instanceof StatResult || (a && a.kind === "Figure"); if (!args.some(rico)) { interp.output.push(args.map((a) => toText(a)).join(kw.sep ?? " ")); return null; } const txt = args.filter((a) => !rico(a)).map((a) => toText(a)).join(kw.sep ?? " "); if (txt) interp.output.push(txt); args.filter(rico).forEach((a) => interp.output.push({ rico: a })); return null; });
   fn("len", ([x]) => { if (x instanceof DataFrame || x instanceof Series) return x.length; if (Array.isArray(x) || typeof x === "string") return x.length; if (x instanceof PyDict) return x.entries.length; if (x instanceof PyTuple) return x.items.length; throw new LabError(`len no aplica a ${typeName(x)}.`); });
   fn("round", ([x, n]) => { if (x instanceof Series || x instanceof DataFrame) return x.round(n ?? 0); if (x instanceof StatResult) throw new LabError("round aplica a números o tablas; un resultado de prueba ya viene redondeado."); const f = 10 ** (n ?? 0); return Math.round(num(x) * f) / f; });
   fn("sum", ([x]) => x instanceof Series ? x.sum() : x.reduce((a, b) => a + num(b), 0)); fn("min", (a) => { const x = a.length === 1 ? a[0] : a; return x instanceof Series ? x.min() : Math.min(...x.map(num)); }); fn("max", (a) => { const x = a.length === 1 ? a[0] : a; return x instanceof Series ? x.max() : Math.max(...x.map(num)); });
@@ -2055,7 +2078,7 @@ function runCell(cell) {
   const interp = new Interpreter(state.globals); const t0 = performance.now();
   let result, error = null;
   try { result = interp.run(cell.ta.value); } catch (e) { error = e; }
-  for (const line of interp.output) { const p = document.createElement("div"); p.className = "print"; p.textContent = line; out.append(p); }
+  for (const line of interp.output) { if (line && line.rico) { renderValue(line.rico, out); continue; } const p = document.createElement("div"); p.className = "print"; p.textContent = line; out.append(p); }
   if (error) {
     const d = document.createElement("div"); d.className = "err";
     const b = document.createElement("b"); b.textContent = error instanceof LabError ? "Error: " : "Error inesperado: "; const m = document.createElement("span"); m.textContent = error.message; d.append(b, m);
@@ -2308,17 +2331,123 @@ function renderRef() {
 }
 
 /* ---------- Analista IA (capacidad sample) ---------- */
-const LANG_REF = () => `Este laboratorio ejecuta un SUBCONJUNTO de Python/pandas en el navegador. Reglas estrictas para que el código funcione:
-- Sin for, if, while, def, lambda, apply, iterrows, query, loc con tuplas complejas, f-strings ni imports (import pandas se ignora).
-- Disponibles: df.head/tail/sample/shape/columns/info/describe/value_counts(normalize=)/groupby(col)[col].mean|sum|count|size|median|agg([...])/sort_values(col, ascending=)/isin/str.contains/between/astype/round/corr/nlargest/reset_index/set_index/fillna/dropna/pd.crosstab(a, b, normalize="index")/pd.cut(serie, bins=[...], labels=[...]).
-- Filtros: df[(df["a"] == "x") & (df["b"] > 1)]; crear columnas: df["nueva"] = df["a"] == "x".
+/* ---------- Compatibilidad con el «pandas normal» que suele escribir la IA ---------- */
+const PLOT_HINT = "Para graficar usa grafico_barras(...), grafico_lineas(...), histograma(...), dispersion(...), mapa_calor(...) o cajas(...); también serie.plot(kind=\"bar\").";
+const LIB_HINT = {
+  sklearn: "Usa las funciones del laboratorio: kmeans(...), codo(...), pca(...), regresion_lineal(...), regresion_logistica(...), arbol_decision(...), bosque_aleatorio(...). Ya estandarizan y separan entrenamiento y prueba solas.",
+  matplotlib: PLOT_HINT, seaborn: PLOT_HINT, plotly: PLOT_HINT,
+  scipy: "Para pruebas usa prueba_t(...), anova(...), chi_cuadrado(...), correlacion(...) o intervalo_confianza(...).",
+  statsmodels: "Usa regresion_lineal(df, y=\"...\", x=[...]) o regresion_logistica(df, y=\"...\", x=[...]).",
+  math: "Usa np.sqrt(...), np.log(...) o round(...).",
+};
+const NAME_HINT = {
+  plt: PLOT_HINT, sns: PLOT_HINT, px: PLOT_HINT, go: PLOT_HINT,
+  KMeans: "kmeans(tabla[[\"col1\", \"col2\"]], k=3) y luego tabla[\"grupo\"] = resultado.etiquetas", PCA: "pca(tabla[[\"col1\", \"col2\", \"col3\"]]) → .PC1, .PC2, .cargas",
+  StandardScaler: "no hace falta: kmeans y pca ya estandarizan solos", MinMaxScaler: "no hace falta: kmeans y pca ya estandarizan solos",
+  RandomForestClassifier: "bosque_aleatorio(df, y=\"...\", x=[...], arboles=40)", RandomForestRegressor: "bosque_aleatorio(df, y=\"...\", x=[...], arboles=40)",
+  DecisionTreeClassifier: "arbol_decision(df, y=\"...\", x=[...], profundidad=3)", DecisionTreeRegressor: "arbol_decision(df, y=\"...\", x=[...], profundidad=3)",
+  LogisticRegression: "regresion_logistica(df, y=\"...\", x=[...])", LinearRegression: "regresion_lineal(df, y=\"...\", x=[...])",
+  train_test_split: "no hace falta: los modelos ya separan entrenamiento y prueba (prueba=0.3)", confusion_matrix: "resultado.matriz_confusion", accuracy_score: "resultado.exactitud",
+  stats: LIB_HINT.scipy, ttest_ind: "prueba_t(grupo1, grupo2)", chi2_contingency: "chi_cuadrado(pd.crosstab(df[\"a\"], df[\"b\"]))", pearsonr: "correlacion(df[\"a\"], df[\"b\"])", f_oneway: "anova(df, valor=\"...\", grupo=\"...\")",
+  sm: LIB_HINT.statsmodels, smf: LIB_HINT.statsmodels, math: LIB_HINT.math,
+  df: "«df» es un nombre de ejemplo: cámbialo por la base real (homicidios, vif, policia, diarios, municipios, departamentos) o por una tabla que ya hayas creado.",
+};
+function locLabels(df, labs) {
+  const pos = labs.map((l) => { const p = df.index.findIndex((x) => x === l || String(x) === String(l)); if (p < 0) throw new LabError(`La etiqueta «${l}» no está en el índice de la tabla.`); return p; });
+  return df.take(pos);
+}
+function parseFString(s, line) {
+  const parts = []; let buf = ""; let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "{" && s[i + 1] === "{") { buf += "{"; i += 2; continue; }
+    if (c === "}" && s[i + 1] === "}") { buf += "}"; i += 2; continue; }
+    if (c === "{") {
+      let depth = 0, j = i + 1, q = null, colon = -1;
+      for (; j < s.length; j++) { const d = s[j]; if (q) { if (d === q) q = null; continue; } if (d === '"' || d === "'") { q = d; continue; } if ("([".includes(d)) depth++; else if (")]".includes(d)) depth--; else if (d === "}" && depth === 0) break; else if (d === ":" && depth === 0 && colon < 0) colon = j; }
+      if (j >= s.length) throw new LabError(`Falta cerrar una llave } en un texto f"..." (línea ${line}).`);
+      const src = s.slice(i + 1, colon >= 0 ? colon : j).replace(/![rsa]\s*$/, ""); const spec = colon >= 0 ? s.slice(colon + 1, j) : "";
+      if (buf) { parts.push(buf); buf = ""; }
+      parts.push({ expr: new Parser(tokenize(src)).parseExpr(), spec }); i = j + 1; continue;
+    }
+    buf += c; i++;
+  }
+  if (buf) parts.push(buf);
+  return parts;
+}
+function formatSpec(v, spec) {
+  const x0 = typeof v === "boolean" ? (v ? 1 : 0) : v;
+  if (!spec || !isNum(x0)) return toText(v);
+  const m = spec.match(/^[<>^]?\d*(,)?(?:\.(\d+))?([fdg%])?$/); if (!m) return toText(v);
+  const dec = m[2] !== undefined ? Number(m[2]) : (m[3] === "d" ? 0 : undefined); let x = x0, suf = "";
+  if (m[3] === "%") { x *= 100; suf = " %"; }
+  return x.toLocaleString("es-CO", dec !== undefined ? { minimumFractionDigits: dec, maximumFractionDigits: dec } : { maximumFractionDigits: 4 }) + suf;
+}
+
+/* ---------- Revisión del código que propone la IA ----------
+   Cada bloque se ejecuta en una copia del cuaderno; si falla, se le devuelve el error a la IA
+   para que lo corrija (máximo 2 rondas) y se marca qué bloques quedaron probados. */
+function bloquesDe(text) { return [...text.matchAll(/```([a-zA-Z]*)[ \t]*\n?([\s\S]*?)```/g)].map((m) => ({ raw: m[0], lang: m[1].toLowerCase(), code: m[2].trim() })); }
+function cajaDeArena() { const g = new Map(); for (const [k, v] of state.globals) g.set(k, v instanceof DataFrame ? v.copy() : v); return g; }
+function probarBloques(bl) {
+  const g = cajaDeArena();
+  return bl.map((b) => {
+    if (b.lang && !["python", "py"].includes(b.lang)) return null;
+    if (/___/.test(b.code)) return { estado: "esqueleto" };
+    try { new Interpreter(g).run(b.code); return { estado: "ok" }; }
+    catch (e) { return { estado: "error", error: (e && e.message ? e.message : String(e)) + (e && e.hint ? " Pista del laboratorio: " + e.hint : "") }; }
+  });
+}
+function avisoIA(container, msg) { let n = container.querySelector(":scope > .ia-estado"); if (!n) { n = document.createElement("div"); n.className = "ia-estado"; container.append(n); } n.textContent = msg; }
+async function revisarRespuesta(text, signal, onEstado) {
+  if (!bloquesDe(text).length) return { text, estados: [] };
+  for (let ronda = 0; ronda < 2; ronda++) {
+    const bl = bloquesDe(text);
+    if (onEstado) onEstado("Probando el código en el laboratorio…"); await new Promise((r) => setTimeout(r, 30));
+    const est = probarBloques(bl);
+    const malos = est.map((e, i) => [e, i]).filter(([e]) => e && e.estado === "error");
+    if (!malos.length || !state.sample) return { text, estados: est };
+    if (onEstado) onEstado("Ese código no funcionaba aquí; pidiendo a la IA que lo corrija…");
+    for (const [e, i] of malos) {
+      const prompt = `${LANG_REF()}\n\nPropusiste este código y FALLÓ al ejecutarlo en el laboratorio:\n\`\`\`python\n${bl[i].code}\n\`\`\`\nError del laboratorio: ${e.error}\n\nReescribe ese bloque para que funcione usando SOLO lo permitido arriba. Responde únicamente con el bloque \`\`\`python corregido, sin explicación.`;
+      try { const { text: t2 } = await state.sample(prompt, { signal, modelTier: "default" }); const nb = bloquesDe(t2 || "")[0]; if (nb && nb.code) text = text.replace(bl[i].raw, "```python\n" + nb.code + "\n```"); }
+      catch (err) { if (err && err.code === "cancelled") throw err; }
+    }
+  }
+  return { text, estados: probarBloques(bloquesDe(text)) };
+}
+
+const LANG_REF = () => `Este laboratorio ejecuta un SUBCONJUNTO de Python/pandas en el navegador. NO es Python completo: el código que no siga estas reglas FALLA y el estudiante se queda bloqueado.
+PROHIBIDO (aquí no existe): importar librerías (sklearn, matplotlib, seaborn, scipy, statsmodels, plotly…; "import pandas as pd" se ignora y no hace falta), plt.* o sns.*, for, while, if como instrucción, def, lambda, listas por comprensión, .apply, .map con funciones, .iterrows, .query, .iloc/.loc con listas de posiciones, merge complejos. No uses nombres de ejemplo como df o data: usa siempre la base real o una tabla que el estudiante ya creó. No inventes funciones ni atributos: usa solo los de esta lista.
+- Disponibles: df.head/tail/sample/shape/columns/info/describe/value_counts(normalize=)/groupby(col)[col].mean|sum|count|size|median|agg([...])/sort_values(col, ascending=)/isin/str.contains/between/astype/round/corr/nlargest/reset_index/set_index/fillna/dropna/copy/pd.crosstab(a, b, normalize="index"|"columns"|"all")/pd.cut(serie, bins=[...], labels=[...]).
+- Filtros: df[(df["a"] == "x") & (df["b"] > 1)]; crear columnas: df["nueva"] = df["a"] == "x"; filtrar una serie de conteos: conteo[conteo > 100]; sus etiquetas: conteo[conteo > 100].index; leer una celda de una tabla cruzada: tabla["columna"]["fila"].
 - Gráficas: grafico_barras(serie, horizontal=True, titulo=""), grafico_lineas(serie), histograma(serie, bins=), mapa_calor(tabla_cruzada), dispersion(df, x=, y=, color=, etiquetas=, tendencia=True), cajas(df, valor=, grupo=), serie.plot(kind="bar").
-- Estadística: prueba_t(s1, s2, nombres=[..]), anova(df, valor=, grupo=), chi_cuadrado(tabla), correlacion(s1, s2), intervalo_confianza(serie), tasa(conteo, poblacion, por=100000).
-- Modelos: kmeans(df[[cols]], k=3) -> .etiquetas .centros; codo(df[[cols]], k_max=8); pca(df[[cols]]) -> .PC1 .PC2 .cargas .componentes; regresion_lineal(df, y=, x=[...]); regresion_logistica(df, y=binaria, x=[...]) -> .exactitud .matriz_confusion .coeficientes; arbol_decision(df, y=, x=[...], profundidad=3); bosque_aleatorio(df, y=, x=[...], arboles=40).
+- Estadística: prueba_t(s1, s2, nombres=[..]), anova(df, valor=, grupo=), chi_cuadrado(tabla) → .v_cramer .residuos, correlacion(s1, s2), intervalo_confianza(serie), tasa(conteo, poblacion, por=100000).
+- Modelos (ya estandarizan y ya separan entrenamiento/prueba: no lo hagas a mano). Usa SOLO estos atributos:
+  kmeans(tabla[[cols]], k=3) → .etiquetas .centros .inercia (guardar grupos: tabla["grupo"] = resultado.etiquetas)
+  codo(tabla[[cols]], k_max=8)
+  pca(tabla[[cols]]) → .PC1 .PC2 .cargas .varianza_explicada .componentes (para graficar: tabla["PC1"] = c.PC1; tabla["PC2"] = c.PC2; dispersion(tabla, x="PC1", y="PC2", color="grupo"))
+  chi_cuadrado(tabla) → .chi2 .p .v_cramer .residuos; correlacion(a, b) → .r .p
+  regresion_lineal(df, y=, x=[...]) → .coeficientes .r2 .mae .predicciones
+  regresion_logistica(df, y=binaria, x=[...]) → .coeficientes .exactitud .sensibilidad .especificidad .matriz_confusion
+  arbol_decision(df, y=, x=[...], profundidad=3) → .exactitud .importancia .matriz_confusion .arbol (si y es numérica: .r2 .mae)
+  bosque_aleatorio(df, y=, x=[...], arboles=40) → .exactitud .importancia .matriz_confusion (si y es numérica: .r2 .mae). No tiene .coeficientes.
+  Escribir solo el nombre del resultado (p. ej. modelo) en la última línea muestra su resumen completo.
 - Bases cargadas (no hace falta leer archivos): ${DATASETS.map((d) => `${d.name} (${d.titulo}: columnas ${state.data[d.name] ? state.data[d.name].columns.join(", ") : ""})`).join("; ")}.
-- Solo se muestra el resultado de la ÚLTIMA expresión de la celda (como Jupyter). Usa print() si quieres varios.
-- MODO TUTOR: el estudiante resuelve expedientes con predicciones, decisiones y «cerraduras» (preguntas que piden un número de su resultado). No resuelvas por él: no le digas qué opción elegir, qué normalización usar, qué k o qué variables escoger, ni le des el número que se le pide. Explícale qué pregunta responde cada alternativa y devuélvele la decisión. Si su código tiene espacios ___, explica qué TIPO de cosa va en cada hueco (una columna, un número, una opción de normalize) sin escribir la respuesta. Sí puedes corregir errores de sintaxis y explicar cómo se lee un resultado, sin sacar la conclusión por él.
-Responde SIEMPRE en español, de forma breve y para personas sin formación técnica (psicólogos, funcionarios). Cuando des código, ponlo en un bloque \`\`\`python usando únicamente las funciones anteriores.`;
+- Para mostrar un resultado déjalo como ÚLTIMA línea de la celda (como Jupyter). print() también muestra tablas y textos f"...".
+Ejemplos correctos (fíjate en el estilo; no copies estas columnas si no son las que pide el estudiante):
+\`\`\`python
+edad = homicidios.groupby("departamento")["edad_aprox"].mean().round(1)
+edad.sort_values(ascending=False).head(10)
+\`\`\`
+\`\`\`python
+tabla = departamentos.set_index("departamento")
+modelo = kmeans(tabla[["pct_rural", "edad_media"]], k=2)
+tabla["grupo"] = modelo.etiquetas
+tabla.groupby("grupo")[["pct_rural", "edad_media"]].mean().round(1)
+\`\`\`
+MODO TUTOR: si el estudiante dice qué quiere calcular, dale el código COMPLETO y funcional, sin espacios ___. Si te pide que decidas por él en un expediente (qué opción marcar, qué normalización usar, qué k o qué variables escoger, qué concluir, o el número que le pide una «cerradura»), no decidas: explica qué pregunta responde cada alternativa y devuélvele la decisión. Si su celda tiene espacios ___, explica qué TIPO de cosa va en cada hueco sin escribir la respuesta. Si algo no se puede hacer con estas funciones, dilo y ofrece lo más cercano que sí existe.
+Responde SIEMPRE en español, de forma breve y para personas sin formación técnica (psicólogos, funcionarios). Cuando des código, ponlo en un bloque \`\`\`python usando únicamente lo anterior.`;
 
 async function initSample() {
   try { if (!window.claude || !window.claude.use) return; const s = await window.claude.use("sample"); state.sample = s || null; } catch { state.sample = null; }
@@ -2326,8 +2455,21 @@ async function initSample() {
 }
 function updateAIButtons() { document.querySelectorAll(".cell .explain, .cell .modify").forEach((b) => { b.hidden = !state.sample; }); }
 function stripFences(text) { return text; }
-function renderAIText(container, text) {
-  container.innerHTML = ""; const parts = text.split(/```(?:python|py)?\n?/); parts.forEach((part, i) => { if (i % 2 === 1) { const pre = document.createElement("pre"); pre.className = "code"; pre.textContent = part.replace(/```$/, "").trim(); const b = document.createElement("button"); b.className = "btn small"; b.textContent = "Insertar en el cuaderno"; b.style.marginBottom = "6px"; b.onclick = () => insertCode(pre.textContent); container.append(b, pre); } else { const span = document.createElement("span"); span.textContent = part.replace(/\*\*/g, ""); container.append(span); } });
+function renderAIText(container, text, estados) {
+  container.innerHTML = ""; const re = /```([a-zA-Z]*)[ \t]*\n?([\s\S]*?)(?:```|$)/g; let last = 0, m, k = 0;
+  const addText = (s) => { if (!s) return; const span = document.createElement("span"); span.textContent = s.replace(/\*\*/g, "").replace(/^#{1,4}\s+/gm, ""); container.append(span); };
+  while ((m = re.exec(text))) {
+    addText(text.slice(last, m.index)); last = re.lastIndex;
+    const lang = m[1].toLowerCase(); const est = estados ? estados[k] : undefined; k++;
+    const pre = document.createElement("pre"); pre.className = "code"; pre.textContent = m[2].trim();
+    if (lang && !["python", "py"].includes(lang)) { container.append(pre); continue; }
+    const head = document.createElement("div"); head.className = "ai-code-head";
+    const b = document.createElement("button"); b.className = "btn small"; b.textContent = "Insertar en el cuaderno"; b.onclick = () => insertCode(pre.textContent); head.append(b);
+    if (est) { const tag = document.createElement("span"); tag.className = "ia-badge " + est.estado; tag.textContent = est.estado === "ok" ? "✓ probado en el laboratorio" : est.estado === "esqueleto" ? "esqueleto: llena los espacios ___" : "⚠ no funcionó aquí"; head.append(tag); }
+    container.append(head, pre);
+    if (est && est.estado === "error") { const n = document.createElement("div"); n.className = "ia-aviso"; n.textContent = "Al probarlo, el laboratorio respondió: " + est.error; container.append(n); }
+  }
+  addText(text.slice(last));
 }
 async function askAboutCell(cell, mode, errText) {
   if (!state.sample) return;
@@ -2341,7 +2483,7 @@ async function askAboutCell(cell, mode, errText) {
   async function runAsk(q) {
     body.textContent = "Pensando…"; const ctl = new AbortController(); const stop = document.createElement("button"); stop.className = "btn small"; stop.textContent = "Detener"; stop.onclick = () => ctl.abort(); $(".ai-head", box).append(stop);
     const prompt = `${LANG_REF()}\n\nCÓDIGO DE LA CELDA:\n\`\`\`python\n${code}\n\`\`\`\n${cell.lastError ? `ÚLTIMO ERROR: ${cell.lastError}\n` : ""}\nPREGUNTA DEL ESTUDIANTE: ${q}`;
-    try { const { text } = await state.sample(prompt, { modelTier: mode === "explicar" ? "quick" : "default", signal: ctl.signal, onText: ({ text }) => renderAIText(body, text) }); renderAIText(body, text); }
+    try { const { text } = await state.sample(prompt, { modelTier: mode === "explicar" ? "quick" : "default", signal: ctl.signal, onText: ({ text }) => renderAIText(body, text) }); renderAIText(body, text); const r = await revisarRespuesta(text, ctl.signal, (msg) => avisoIA(body, msg)); renderAIText(body, r.text, r.estados); }
     catch (e) { if (e.code === "cancelled") { if (!e.text) body.textContent = "Detenido."; } else if (e.code === "not_granted" || e.code === "sampling_disabled") { state.sample = null; updateAIButtons(); body.textContent = "El asistente de IA no está disponible en esta vista. Usa la pestaña «Códigos»."; } else if (e.code === "rate_limited") body.textContent = "Demasiadas consultas seguidas. Espera un momento e intenta de nuevo."; else body.textContent = (e.text || "") + "\nNo pude obtener respuesta. Intenta de nuevo."; }
     finally { stop.remove(); }
   }
@@ -2351,13 +2493,13 @@ function renderIA() {
   if (!state.sample) { p.innerHTML = `<div class="notice">El Analista IA se activa cuando abres el laboratorio desde Claude (la primera consulta pide tu permiso). Mientras tanto, la pestaña «Códigos» tiene todos los comandos con ejemplos.</div>`; return; }
   const intro = document.createElement("p"); intro.style.cssText = "font-size:13px;color:var(--muted);margin:0 0 8px"; intro.textContent = "Pregunta en español qué código necesitas o cómo interpretar un resultado. La IA conoce las bases y las funciones del laboratorio."; p.append(intro);
   const chat = document.createElement("div"); chat.className = "chat"; p.append(chat);
-  for (const m of state.chat) { const d = document.createElement("div"); d.className = "msg " + (m.role === "user" ? "u" : "a"); if (m.role === "user") d.textContent = m.content; else renderAIText(d, m.content); chat.append(d); }
+  for (const m of state.chat) { const d = document.createElement("div"); d.className = "msg " + (m.role === "user" ? "u" : "a"); if (m.role === "user") d.textContent = m.content; else renderAIText(d, m.content, m.estados); chat.append(d); }
   const ask = document.createElement("div"); ask.className = "ask"; ask.innerHTML = `<input type="text" id="chat-input" placeholder="p. ej. ¿cómo comparo la edad por sexo?"><button class="btn small primary">Enviar</button>`; p.append(ask);
   const inp = $("input", ask); const send = async () => {
     const q = inp.value.trim(); if (!q) return; inp.value = ""; state.chat.push({ role: "user", content: q }); const u = document.createElement("div"); u.className = "msg u"; u.textContent = q; chat.append(u); const a = document.createElement("div"); a.className = "msg a"; a.textContent = "Pensando…"; chat.append(a); a.scrollIntoView({ block: "nearest" });
     const lastCell = state.cells.find((c) => c.el.classList.contains("active")) || state.cells[state.cells.length - 1];
-    const turns = [{ role: "user", content: LANG_REF() + (lastCell && lastCell.ta.value.trim() ? `\n\nCELDA ACTIVA DEL ESTUDIANTE:\n\`\`\`python\n${lastCell.ta.value}\n\`\`\`` : "") }, ...state.chat.slice(-8)];
-    try { const { text } = await state.sample(turns, { cache: false, onText: ({ text }) => renderAIText(a, text) }); renderAIText(a, text); state.chat.push({ role: "assistant", content: text }); }
+    const turns = [{ role: "user", content: LANG_REF() + (lastCell && lastCell.ta.value.trim() ? `\n\nCELDA ACTIVA DEL ESTUDIANTE:\n\`\`\`python\n${lastCell.ta.value}\n\`\`\`` : "") }, ...state.chat.slice(-8).map((m) => ({ role: m.role, content: m.content }))];
+    try { const { text } = await state.sample(turns, { cache: false, onText: ({ text }) => renderAIText(a, text) }); renderAIText(a, text); const r = await revisarRespuesta(text, undefined, (msg) => avisoIA(a, msg)); renderAIText(a, r.text, r.estados); state.chat.push({ role: "assistant", content: r.text, estados: r.estados }); }
     catch (e) { if (e.code === "not_granted" || e.code === "sampling_disabled") { state.sample = null; renderIA(); } else a.textContent = (e.text || "") + "\nNo pude obtener respuesta (" + (e.code || "error") + "). Intenta de nuevo."; }
   };
   $("button", ask).onclick = send; inp.onkeydown = (e) => { if (e.key === "Enter") send(); };
@@ -2399,7 +2541,7 @@ async function apiJSON(path, body, signal) {
 function makeRemoteSample() {
   const fn = async (input, opts = {}) => {
     try {
-      const j = await apiJSON("/api/preguntar", { input, tier: opts.modelTier || "default", clase: store.get("clase", "") }, opts.signal);
+      const j = await apiJSON("/api/preguntar", { input, tier: opts.modelTier || "default", clase: store.get("clase", ""), dispositivo: deviceId() }, opts.signal);
       if (opts.onText) opts.onText({ text: j.text, delta: j.text });
       return { text: j.text, truncated: false, modelTierApplied: opts.modelTier || "default" };
     } catch (e) {
