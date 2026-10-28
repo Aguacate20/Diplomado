@@ -961,6 +961,7 @@ class Interpreter {
     if (obj && obj.kind === "StrAccessor") { if (!(name in obj)) throw new LabError(`.str no tiene «${name}».`, "Prueba .str.contains(\"texto\"), .str.lower(), .str.len()"); return new PyFunc(name, (args, kw) => obj[name](...args, kw)); }
     if (obj && obj.kind === "PlotAccessor") return new PyFunc(name, (args, kw) => obj.plot(name, kw));
     if (Array.isArray(obj)) { if (name === "append") return new PyFunc("append", ([x]) => { obj.push(x); return null; }); if (name === "index") return new PyFunc("index", ([x]) => obj.indexOf(x)); }
+    if (typeof obj === "number" && name === "round") return new PyFunc("round", ([n]) => { const f = 10 ** (n ?? 0); return Math.round(obj * f) / f; });
     if (typeof obj === "string") { const fns = { upper: () => obj.toUpperCase(), lower: () => obj.toLowerCase(), strip: () => obj.trim(), title: () => obj.replace(/\p{L}+/gu, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase()), replace: (a, b) => obj.split(a).join(b), split: (s) => obj.split(s ?? /\s+/), startswith: (s) => obj.startsWith(s), endswith: (s) => obj.endsWith(s), format: (...a) => { let i = 0; return obj.replace(/\{\}/g, () => String(a[i++])); } }; if (name in fns) return new PyFunc(name, (args) => fns[name](...args)); }
     if (obj instanceof PyDict) { const fns = { keys: () => obj.entries.map((x) => x[0]), values: () => obj.entries.map((x) => x[1]), items: () => obj.entries.map((x) => new PyTuple(x)), get: (k, d = null) => obj.get(k) ?? d }; if (name in fns) return new PyFunc(name, (args) => fns[name](...args)); }
     throw new LabError(`Un valor de tipo ${typeName(obj)} no tiene «.${name}».`, obj instanceof Series ? undefined : "¿Estás aplicando el método sobre una tabla o una columna? Revisa qué devuelve la expresión anterior.");
@@ -1311,11 +1312,13 @@ function solveLinear(A, b) { // Gaussian elimination with partial pivoting
 }
 function invert(A) { const n = A.length; const M = A.map((r, i) => [...r, ...Array.from({ length: n }, (_, j) => i === j ? 1 : 0)]); for (let c = 0; c < n; c++) { let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r; [M[c], M[p]] = [M[p], M[c]]; if (Math.abs(M[c][c]) < 1e-12) M[c][c] = 1e-12; const d = M[c][c]; for (let k = 0; k < 2 * n; k++) M[c][k] /= d; for (let r = 0; r < n; r++) { if (r === c) continue; const f = M[r][c]; for (let k = 0; k < 2 * n; k++) M[r][k] -= f * M[c][k]; } } return M.map((r) => r.slice(n)); }
 
+const redondeoSig = (v) => (!isNum(v) ? v : Math.abs(v) >= 1 ? Math.round(v * 1000) / 1000 : Number(v.toPrecision(4)));
+function refRows(enc) { const r = (enc || []).filter((e) => e.type === "cat").map((e) => `${e.col} = «${e.ref}»`); return r.length ? [["Categoría de referencia (cada coeficiente se compara contra ella)", r.join(" · ")]] : []; }
 function regresion_lineal(df, kw = {}) {
   const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null;
   if (!(df instanceof DataFrame) || !y || !xcols) throw new LabError("regresion_lineal(df, y=\"columna\", x=[\"col1\", \"col2\"])");
   if (!df.col(y).isNumeric()) throw new LabError(`La variable y («${y}») debe ser numérica.`, "Para predecir categorías usa regresion_logistica o arbol_decision.");
-  const { X, keep, names } = withY(df, y, designMatrix(df, xcols)); const yv = keep.map((i) => df.data[y][i]);
+  const { X, keep, names, encoders } = withY(df, y, designMatrix(df, xcols)); const yv = keep.map((i) => df.data[y][i]);
   const n = X.length, p = names.length + 1; if (n <= p + 1) throw new LabError("Muy pocas filas para ajustar el modelo.");
   const Xd = X.map((r) => [1, ...r]);
   const XtX = Array.from({ length: p }, () => Array(p).fill(0)), Xty = Array(p).fill(0);
@@ -1325,20 +1328,21 @@ function regresion_lineal(df, kw = {}) {
   const r2 = 1 - sse / sst, r2adj = 1 - (1 - r2) * (n - 1) / (n - p); const mae = yv.reduce((s, v, i) => s + Math.abs(v - pred[i]), 0) / n, rmse = Math.sqrt(sse / n);
   const sigma2 = sse / (n - p); const inv = invert(XtX); const se = beta.map((_, j) => Math.sqrt(Math.max(sigma2 * inv[j][j], 0)));
   const tvals = beta.map((b, j) => b / se[j]); const pvals = tvals.map((t) => tTwoSided(t, n - p));
-  const coefDF = new DataFrame({ variable: ["(intercepto)", ...names], coeficiente: beta.map((b) => Math.round(b * 1000) / 1000), error_est: se.map((v) => Math.round(v * 1000) / 1000), t: tvals.map((v) => Math.round(v * 100) / 100), p: pvals.map((v) => Math.round(v * 10000) / 10000), signif: pvals.map(sig) });
+  const coefDF = new DataFrame({ variable: ["(intercepto)", ...names], coeficiente: beta.map(redondeoSig), error_est: se.map(redondeoSig), t: tvals.map((v) => Math.round(v * 100) / 100), p: pvals.map((v) => Math.round(v * 10000) / 10000), signif: pvals.map(sig) });
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" }); keep.forEach((i, r) => predS.values[i] = pred[r]);
   const resid = new Series(Array(df.length).fill(NaN), { index: df.index, name: "residuo" }); keep.forEach((i, r) => resid.values[i] = yv[r] - pred[r]);
   const strongest = names.map((nm, j) => [nm, beta[j + 1], pvals[j + 1]]).sort((a, b) => a[2] - b[2])[0];
   return new StatResult(`Regresión lineal: ${y} ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, r2, r2_ajustado: r2adj, mae, rmse, n, predicciones: predS, residuos: resid },
-    [["n", n.toLocaleString("es-CO")], ["R² (varianza explicada)", fmtNum(r2, 3)], ["R² ajustado", fmtNum(r2adj, 3)], ["MAE (error absoluto medio)", fmtNum(mae)], ["RMSE (raíz del error cuadrático medio)", fmtNum(rmse)]],
+    [["n", n.toLocaleString("es-CO")], ...refRows(encoders), ["R² (varianza explicada)", fmtNum(r2, 3)], ["R² ajustado", fmtNum(r2adj, 3)], ["MAE (error absoluto medio)", fmtNum(mae)], ["RMSE (raíz del error cuadrático medio)", fmtNum(rmse)]],
     `El modelo explica el ${fmtNum(r2 * 100, 1)} % de la variación de «${y}». En promedio se equivoca por ${fmtNum(mae)} unidades. Cada coeficiente dice cuánto cambia «${y}» cuando esa variable sube una unidad, manteniendo las demás fijas${strongest ? `; la más clara aquí es «${strongest[0]}» (${strongest[1] > 0 ? "+" : ""}${fmtNum(strongest[1], 3)}, p ${pFmt(strongest[2])})` : ""}.`,
     [{ type: "table", df: coefDF, caption: "Coeficientes" }]);
 }
 
 function regresion_logistica(df, kw = {}) {
-  const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const prueba = kw.prueba ?? 0.3;
+  const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const prueba = kw.prueba ?? 0.3; const umbral = kw.umbral ?? kw.threshold ?? 0.5;
+  if (!(typeof umbral === "number" && umbral > 0 && umbral < 1)) throw new LabError("El umbral debe ser un número entre 0 y 1, por ejemplo umbral=0.3.", "Con 0.5 el modelo dice «sí» cuando la probabilidad llega a 50 %; con 0.2, cuando llega a 20 %.");
   if (!(df instanceof DataFrame) || !y || !xcols) throw new LabError("regresion_logistica(df, y=\"columna_binaria\", x=[\"col1\", \"col2\"])");
-  const { X, keep, names } = withY(df, y, designMatrix(df, xcols)); const t = targetVector(df, y, keep);
+  const { X, keep, names, encoders } = withY(df, y, designMatrix(df, xcols)); const t = targetVector(df, y, keep);
   if (t.type !== "bin") throw new LabError(`La variable y («${y}») debe tener exactamente dos categorías (o ser verdadero/falso).`, "Crea una: df[\"es_mujer\"] = df[\"sexo_victima\"] == \"Mujer\"");
   const n = X.length, p = names.length + 1; const Xd = X.map((r) => [1, ...r]);
   const { train, test } = trainTestSplit(n, prueba, kw.semilla ?? 42);
@@ -1357,12 +1361,12 @@ function regresion_logistica(df, kw = {}) {
   const coefRaw = beta.map((b, j) => j === 0 ? b - beta.slice(1).reduce((s, bb, k) => s + bb * sc.mu[k] / sc.sd[k], 0) : b / sc.sd[j - 1]);
   const seRaw = seS.map((s, j) => j === 0 ? s : s / sc.sd[j - 1]); const zvals = beta.map((b, j) => b / seS[j]); const pvals = zvals.map((z) => 2 * (1 - normCDF(Math.abs(z))));
   const predict = (i) => 1 / (1 + Math.exp(-Zs(X[i]).reduce((s, v, j) => s + v * beta[j], 0)));
-  const evalSet = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predict(i) >= 0.5 ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); };
+  const evalSet = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predict(i) >= umbral ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); };
   const mTrain = evalSet(train), mTest = evalSet(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i])));
-  const coefDF = new DataFrame({ variable: ["(intercepto)", ...names], coeficiente: coefRaw.map((v) => Math.round(v * 1000) / 1000), odds_ratio: coefRaw.map((v, j) => j === 0 ? NaN : Math.round(Math.exp(v) * 100) / 100), p: pvals.map((v) => Math.round(v * 10000) / 10000), signif: pvals.map(sig) });
+  const coefDF = new DataFrame({ variable: ["(intercepto)", ...names], coeficiente: coefRaw.map(redondeoSig), odds_ratio: coefRaw.map((v, j) => j === 0 ? NaN : Math.round(Math.exp(v) * 100) / 100), p: pvals.map((v) => Math.round(v * 10000) / 10000), signif: pvals.map(sig) });
   const probS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "probabilidad" }); keep.forEach((i, r) => probS.values[i] = predict(r));
-  return new StatResult(`Regresión logística: P(${y} = ${t.positive}) ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, exactitud: mTest.acc, exactitud_entrenamiento: mTrain.acc, sensibilidad: mTest.sens, especificidad: mTest.spec, precision: mTest.prec, matriz_confusion: mTest.cm, probabilidades: probS, n: n },
-    [["Clase positiva", `${y} = ${t.positive}`], ["n (entrenamiento / prueba)", `${train.length.toLocaleString("es-CO")} / ${test.length.toLocaleString("es-CO")}`], ["Exactitud en prueba", `${fmtNum(mTest.acc * 100, 1)} % (acertar siempre la clase mayoritaria daría ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(mTrain.acc * 100, 1) + " %"], ["Sensibilidad (detecta positivos)", fmtNum(mTest.sens * 100, 1) + " %"], ["Especificidad (detecta negativos)", fmtNum(mTest.spec * 100, 1) + " %"], ["Precisión (de los que marca, acierta)", fmtNum(mTest.prec * 100, 1) + " %"]],
+  return new StatResult(`Regresión logística: P(${y} = ${t.positive}) ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, exactitud: mTest.acc, exactitud_entrenamiento: mTrain.acc, sensibilidad: mTest.sens, especificidad: mTest.spec, precision: mTest.prec, matriz_confusion: mTest.cm, probabilidades: probS, umbral, n: n },
+    [["Clase positiva", `${y} = ${t.positive}`], ["Umbral de decisión", `${fmtNum(umbral, 2)} (dice «sí» si la probabilidad es ${fmtNum(umbral * 100, 0)} % o más)`], ...refRows(encoders), ["n (entrenamiento / prueba)", `${train.length.toLocaleString("es-CO")} / ${test.length.toLocaleString("es-CO")}`], ["Exactitud en prueba", `${fmtNum(mTest.acc * 100, 1)} % (acertar siempre la clase mayoritaria daría ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(mTrain.acc * 100, 1) + " %"], ["Sensibilidad (detecta positivos)", fmtNum(mTest.sens * 100, 1) + " %"], ["Especificidad (detecta negativos)", fmtNum(mTest.spec * 100, 1) + " %"], ["Precisión (de los que marca, acierta)", fmtNum(mTest.prec * 100, 1) + " %"]],
     `Un odds ratio > 1 aumenta la probabilidad de «${t.positive}»; < 1 la reduce. Compara la exactitud con la del «modelo tonto» que siempre dice la clase más frecuente (${fmtNum(base * 100, 1)} %): si no la supera claramente, el modelo no aprendió mucho. Mira la matriz de confusión: ¿qué tipo de error es más costoso en tu contexto?`,
     [{ type: "table", df: coefDF, caption: "Coeficientes y odds ratios" }, { type: "table", df: mTest.cm, caption: "Matriz de confusión (datos de prueba): filas = realidad, columnas = predicción" }]);
 }
@@ -1389,29 +1393,37 @@ function buildTree(X, yv, idx, depth, maxDepth, minLeaf, featNames, featTypes, i
   return node;
 }
 function treePredict(node, x) { while (node.left) node = x[node.f] <= node.thr ? node.left : node.right; return node; }
-function treeToText(node, names, isNum, posName, depth = 0) {
+function treeToText(node, names, isNum, posLabel, depth = 0, tipos = []) {
   const pad = "│   ".repeat(depth);
-  if (!node.left) return `${pad}└─ ${isNum ? `predice ${fmtNum(node.value)}` : `predice ${node.value ? posName : "no " + posName} (${fmtNum(node.p * 100, 0)} % positivos)`} · n = ${node.n.toLocaleString("es-CO")}\n`;
-  const nm = names[node.f]; const q = node.cat ? `¿${nm.split("=")[0]} es «${nm.split("=").slice(1).join("=")}»?` : `¿${nm} ≤ ${fmtNum(node.thr)}?`;
-  return `${pad}${q}\n${pad}├─ No:\n${treeToText(node.cat ? node.left : node.left, names, isNum, posName, depth + 1)}${pad}├─ Sí:\n${treeToText(node.cat ? node.right : node.right, names, isNum, posName, depth + 1)}`;
+  if (!node.left) return `${pad}└─ ${isNum ? `predice ${fmtNum(node.value)}` : `predice ${node.value ? "SÍ" : "NO"} · ${fmtNum(node.p * 100, 0)} % son «${posLabel}»`} · n = ${node.n.toLocaleString("es-CO")}\n`;
+  const nm = names[node.f]; const ty = tipos[node.f] || (node.cat ? "cat" : "num"); let q, si, no;
+  if (ty === "cat") { q = `¿${nm.split("=")[0]} es «${nm.split("=").slice(1).join("=")}»?`; si = node.right; no = node.left; }
+  else if (ty === "bool") { q = `¿${nm}?`; si = node.right; no = node.left; }
+  else { q = `¿${nm} ≤ ${fmtNum(node.thr)}?`; si = node.left; no = node.right; }
+  return `${pad}${q}\n${pad}├─ Sí:\n${treeToText(si, names, isNum, posLabel, depth + 1, tipos)}${pad}└─ No:\n${treeToText(no, names, isNum, posLabel, depth + 1, tipos)}`;
+}
+function importanciaPorVariable(imp, names) {
+  const agg = {}; for (const [k, v] of Object.entries(imp)) { const base = names[k].split("=")[0]; agg[base] = (agg[base] || 0) + v; }
+  const tot = Object.values(agg).reduce((x, y) => x + y, 0) || 1; const pares = Object.entries(agg).sort((x, y) => y[1] - x[1]);
+  return new DataFrame({ variable: pares.map((x) => x[0]), importancia: pares.map((x) => Math.round(x[1] / tot * 1000) / 1000) });
 }
 function treeImportance(node, imp) { if (!node.left) return; imp[node.f] = (imp[node.f] || 0) + node.gain; treeImportance(node.left, imp); treeImportance(node.right, imp); }
 
 function arbol_decision(df, kw = {}) {
-  const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const maxDepth = kw.profundidad ?? kw.max_depth ?? 3; const prueba = kw.prueba ?? 0.3; const minLeaf = kw.min_hojas ?? 20;
+  const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const maxDepth = kw.profundidad ?? kw.max_depth ?? 3; const prueba = kw.prueba ?? 0.3; const minLeaf = kw.min_hojas ?? 5;
   if (!(df instanceof DataFrame) || !y || !xcols) throw new LabError("arbol_decision(df, y=\"columna\", x=[\"col1\", \"col2\"], profundidad=3)");
   const { X, keep, names, encoders } = withY(df, y, designMatrix(df, xcols)); const t = targetVector(df, y, keep);
   if (t.type === "multi") throw new LabError(`«${y}» tiene más de dos categorías. El laboratorio predice variables binarias o numéricas.`, "Crea una variable sí/no: df[\"fuego\"] = df[\"mecanismo\"] == \"Proyectil de arma de fuego\"");
   const isNumY = t.type === "num"; const featTypes = names.map((nm) => nm.includes("=") ? "cat" : "num");
   const { train, test } = trainTestSplit(X.length, prueba, kw.semilla ?? 42);
   const tree = buildTree(X, t.yv, train, 0, maxDepth, minLeaf, names, featTypes, isNumY, mulberry(7), 0);
-  const txt = treeToText(tree, names, isNumY, t.positive);
+  const tipos = names.map((nm) => (nm.includes("=") ? "cat" : (encoders.find((e) => e.col === nm) || {}).type === "bool" ? "bool" : "num")); const txt = treeToText(tree, names, isNumY, t.positive === "True" ? y : t.positive, 0, tipos);
   const imp = {}; treeImportance(tree, imp); const tot = Object.values(imp).reduce((a, b) => a + b, 0) || 1;
-  const impDF = new DataFrame({ variable: Object.keys(imp).map((k) => names[k]), importancia: Object.values(imp).map((v) => Math.round(v / tot * 1000) / 1000) }).sort_values("importancia", { ascending: false });
+  const impDF = importanciaPorVariable(imp, names);
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" });
   let rows, interp, fields;
   if (isNumY) { const ev = (idx) => { const errs = idx.map((i) => Math.abs(treePredict(tree, X[i]).value - t.yv[i])); const m = mean(idx.map((i) => t.yv[i])); const sse = idx.reduce((s, i) => s + (treePredict(tree, X[i]).value - t.yv[i]) ** 2, 0), sst = idx.reduce((s, i) => s + (t.yv[i] - m) ** 2, 0); return { mae: mean(errs), r2: 1 - sse / sst }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value); rows = [["Profundidad", maxDepth], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = `El árbol parte los datos con preguntas sí/no. Si el R² de entrenamiento es mucho mayor que el de prueba, el árbol memorizó (sobreajuste): baja la profundidad.`; }
-  else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = treePredict(tree, X[i]).value; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value ? t.positive : (t.negative || "False")); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Profundidad", maxDepth], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; interp = `Lee el árbol de arriba abajo como un interrogatorio: cada pregunta divide los casos. Compara la exactitud con la del modelo que siempre dice la clase mayoritaria (${fmtNum(base * 100, 1)} %). Si entrenamiento ≫ prueba, el árbol memorizó: baja la profundidad.`; fields.matriz = b.cm; }
+  else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = treePredict(tree, X[i]).value; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => { const v = treePredict(tree, X[r]).value; predS.values[i] = t.positive === "True" ? !!v : v ? t.positive : (t.negative || "False"); }); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Profundidad", maxDepth], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; interp = `Lee el árbol de arriba abajo como un interrogatorio: cada pregunta divide los casos. Compara la exactitud con la del modelo que siempre dice la clase mayoritaria (${fmtNum(base * 100, 1)} %). Si entrenamiento ≫ prueba, el árbol memorizó: baja la profundidad.`; fields.matriz = b.cm; }
   return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz_confusion ? [{ type: "table", df: fields.matriz_confusion, caption: "Matriz de confusión (prueba)" }] : []));
 }
 function bosque_aleatorio(df, kw = {}) {
@@ -1424,7 +1436,7 @@ function bosque_aleatorio(df, kw = {}) {
   const mtry = Math.max(1, Math.round(Math.sqrt(names.length))); const trees = []; const imp = {};
   for (let b = 0; b < nTrees; b++) { const boot = train.map(() => train[Math.floor(rnd() * train.length)]); const tr = buildTree(X, t.yv, boot, 0, maxDepth, minLeaf, names, featTypes, isNumY, rnd, mtry); trees.push(tr); treeImportance(tr, imp); }
   const tot = Object.values(imp).reduce((a, b) => a + b, 0) || 1;
-  const impDF = new DataFrame({ variable: Object.keys(imp).map((k) => names[k]), importancia: Object.values(imp).map((v) => Math.round(v / tot * 1000) / 1000) }).sort_values("importancia", { ascending: false });
+  const impDF = importanciaPorVariable(imp, names);
   const predictRow = (x) => { if (isNumY) return mean(trees.map((tr) => treePredict(tr, x).value)); const votes = trees.reduce((s, tr) => s + treePredict(tr, x).value, 0); return votes / trees.length; };
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" });
   let rows, fields, interp, extra = [{ type: "table", df: impDF, caption: "Importancia de variables (promedio del bosque)" }];
@@ -1490,7 +1502,7 @@ function boxFigure(groups, kw = {}) { return makeFigure({ type: "box", groups: g
 function boxStats(v) { const a = [...v].sort((x, y) => x - y); if (!a.length) return null; const q1 = quantile(a, 0.25), q2 = quantile(a, 0.5), q3 = quantile(a, 0.75); const iqr = q3 - q1; const lo = a.find((x) => x >= q1 - 1.5 * iqr), hi = [...a].reverse().find((x) => x <= q3 + 1.5 * iqr); return { q1, q2, q3, lo, hi, n: a.length, mean: mean(a) }; }
 
 /* helpers en español */
-function grafico_barras(obj, kw = {}) { if (obj instanceof StatResult) obj = obj.fields.centros || obj.fields.importancia; return plotObject(obj, { ...kw, kind: kw.horizontal ? "barh" : "bar" }); }
+function grafico_barras(obj, kw = {}) { if (obj instanceof StatResult) obj = obj.fields.centros || obj.fields.importancia; if (obj instanceof DataFrame && obj.columns.includes("variable") && obj.columns.includes("importancia")) { obj = new Series(obj.data.importancia.map((v) => Math.round(v * 1000) / 10), { index: [...obj.data.variable], name: "importancia (%)" }); kw = { ylabel: "importancia (%)", ...kw }; } return plotObject(obj, { ...kw, kind: kw.horizontal ? "barh" : "bar" }); }
 function grafico_lineas(obj, kw = {}) { return plotObject(obj, { ...kw, kind: "line" }); }
 function histograma(s, kw = {}) { if (s instanceof DataFrame) throw new LabError("histograma recibe una columna: histograma(df[\"edad_aprox\"])"); return histogramFigure(s, kw); }
 function dispersion(df, kw = {}, pos = []) { if (df instanceof StatResult && df.fields.componentes) df = df.fields.componentes; if (!(df instanceof DataFrame)) throw new LabError("dispersion(df, x=\"col\", y=\"col\", color=\"col\")"); const x = kw.x ?? pos[0], y = kw.y ?? pos[1]; if (!x || !y) throw new LabError("dispersion necesita x= y y=.", "Ejemplo: dispersion(perfil, x=\"pct_arma_fuego\", y=\"edad_media\", color=\"cluster\")"); return scatterFigure(df, x, y, kw); }
@@ -1661,7 +1673,33 @@ const CHECKS = {
   turnoCruce: () => { const h = state.data.homicidios; const d = h.col("dia_semana").values, r = h.col("rango_hora").values; let n = 0; for (let i = 0; i < d.length; i++) { if ((d[i] === "sábado" && r[i] === "21:00 a 23:59") || (d[i] === "domingo" && r[i] === "00:00 a 02:59")) n++; } return n; },
   bogotaPadre: () => { const v = state.data.vif; const ag = new Set(["Padre", "Madre", "Padrastro", "Hermano", "Cuñado", "Hijo"]); const d = v.col("departamento").values, a = v.col("agresor").values; let tot = 0, pad = 0; for (let i = 0; i < d.length; i++) { if (d[i] === "Bogotá, D.C." && ag.has(a[i])) { tot++; if (a[i] === "Padre") pad++; } } return 100 * pad / tot; },
   vichada: () => state.data.vif.col("departamento").values.filter((x) => x === "Vichada").length,
+  // Sesión 4
+  mujerAnual: () => Math.abs(coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t"] }), "t")) * 365,
+  mujerRelativo: () => 100 * CHECKS.mujerAnual() / state.data.diarios.col("mujeres").mean(),
+  festivoMujer: () => [[], ["fin_de_semana"], ["quincena"], ["fin_de_semana", "quincena"]].map((extra) => coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t", "festivo_fijo", ...extra] }), "festivo_fijo")),
+  tontoHombre: () => { const v = state.data.homicidios.col("sexo_victima").values; return [100 * v.filter((x) => x === "Hombre").length / v.length, 100 - 100 * v.filter((x) => x === "Mujer").length / v.length]; },
+  sensMujer05: () => 100 * regresion_logistica(baseH(), { y: "es_mujer", x: X_MUJER }).fields.sensibilidad,
+  sensMujer02: () => 100 * regresion_logistica(baseH(), { y: "es_mujer", x: X_MUJER, umbral: 0.2 }).fields.sensibilidad,
+  tontoArma: () => 100 * state.data.homicidios.col("arma_fuego").mean(),
+  especArma: () => 100 * regresion_logistica(state.data.homicidios, { y: "arma_fuego", x: ["escenario", "rango_hora", "sexo_victima"] }).fields.especificidad,
+  exactArmaCirc: () => 100 * regresion_logistica(state.data.homicidios, { y: "arma_fuego", x: ["escenario", "rango_hora", "sexo_victima", "circunstancia"] }).fields.exactitud,
+  // Sesión 5
+  tontoRina: () => { const r = baseDos().col("es_rina").values; return 100 - 100 * r.filter((x) => x === true).length / r.length; },
+  brecha15: () => { const a = arbol_decision(baseDos(), { y: "es_rina", x: X6, profundidad: 15 }).fields; return 100 * (a.exactitud_entrenamiento - a.exactitud); },
+  bosqueArbol: () => { const a = arbol_decision(baseDos(), { y: "es_rina", x: X6, profundidad: 3 }).fields.exactitud; return [bosque6().fields.exactitud, ...[10, 100].map((n) => bosque_aleatorio(baseDos(), { y: "es_rina", x: X6, arboles: n }).fields.exactitud)].map((b) => 100 * (b - a)); },
+  bosqueArbolSin: () => { const x5 = X6.slice(1); return 100 * (bosque_aleatorio(baseDos(), { y: "es_rina", x: x5, arboles: 40 }).fields.exactitud - arbol_decision(baseDos(), { y: "es_rina", x: x5, profundidad: 3 }).fields.exactitud); },
+  putumayoReg: () => { const h = state.data.homicidios; const d = h.col("departamento").values, c = h.col("circunstancia").values; return d.filter((x, i) => x === "Putumayo" && c[i] !== "Sin información").length; },
+  aciertoMayor: () => { const d = baseDos(); const p = bosque6().fields.predicciones.values, y = d.col("es_rina").values, cv = d.col("ciclo_vital").values; let n = 0, ok = 0; for (let i = 0; i < p.length; i++) if (cv[i] === "Adulto Mayor") { n++; if ((p[i] >= 0.5) === (y[i] === true)) ok++; } return 100 * ok / n; },
 };
+/* Bases derivadas para las cerraduras (se calculan una vez, siempre desde los datos originales) */
+const _memo = new Map();
+const memo = (k, f) => { if (!_memo.has(k)) _memo.set(k, f()); return _memo.get(k); };
+const X_MUJER = ["en_vivienda", "arma_blanca", "arma_fuego", "edad_aprox"];
+const X6 = ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "edad_aprox"];
+function coefDe(res, nombre) { const c = res.fields.coeficientes; return c.data.coeficiente[c.data.variable.indexOf(nombre)]; }
+function baseH() { return memo("H", () => { const h = state.data.homicidios.copy(); h.setColumn("es_mujer", h.col("sexo_victima").values.map((v) => v === "Mujer")); h.setColumn("en_vivienda", h.col("escenario").values.map((v) => v === "Vivienda")); h.setColumn("arma_blanca", h.col("mecanismo").values.map((v) => v === "Cortopunzante")); return h; }); }
+function baseDos() { return memo("dos", () => { const h = state.data.homicidios; const d = h.filter(h.col("circunstancia").values.map((v) => v === "Riña" || v === "Venganza o ajuste de cuentas")); d.setColumn("es_rina", d.col("circunstancia").values.map((v) => v === "Riña")); return d; }); }
+function bosque6() { return memo("b6", () => bosque_aleatorio(baseDos(), { y: "es_rina", x: X6, arboles: 40 })); }
 
 /* Andamiaje de la sesión 3: cada espacio ___ de un esqueleto tiene opciones para elegir (sin teclear código).
    op: valor (texto) o { v: valor, t: etiqueta, d: descripción }; si no hay d, se usa el diccionario de columnas. */
@@ -1921,67 +1959,199 @@ const MISIONES = [
     ],
     veredicto: "Reescribe una de las tres conclusiones para que sí se sostenga." },
 
-  /* ---------------- SESIÓN 4 ---------------- */
-  { id: "4-1", sesion: 4, titulo: "La tendencia", concepto: "Regresión lineal",
-    historia: "El comandante pregunta si los homicidios diarios están bajando. Ajusta una recta a la serie: la pendiente es tu respuesta, el R² tu honestidad.",
-    hipotesis: "Los homicidios diarios disminuyen con el tiempo entre 2003 y 2005.",
-    pistas: [
-      { t: "Regresión del total diario contra el tiempo (t = día número).", c: "regresion_lineal(diarios, y=\"homicidios\", x=[\"t\"])" },
-      { t: "Añade el fin de semana como variable.", c: "regresion_lineal(diarios, y=\"homicidios\", x=[\"t\", \"fin_de_semana\"])" },
-      { t: "¿Y los festivos?", c: "regresion_lineal(diarios, y=\"homicidios\", x=[\"t\", \"fin_de_semana\", \"festivo_fijo\", \"quincena\"])" },
-      { t: "Grafica la serie con promedio móvil de 30 días para ver la tendencia.", c: "s = diarios.set_index(\"fecha\")[\"homicidios\"]\ngrafico_lineas(s.rolling(30).mean(), titulo=\"Promedio móvil de 30 días\")" },
+  /* ---------------- SESIÓN 4 · Predecir vs. explicar (formato «pensar antes de insertar») ---------------- */
+  { id: "4-1", sesion: 4, titulo: "¿Bajan también los homicidios de mujeres?", concepto: "Regresión lineal: pendiente, unidades y R²",
+    historia: "En clase vimos que los homicidios diarios bajaron unos 9,5 por año entre 2003 y 2005. La Secretaría de la Mujer pregunta si con las mujeres pasa lo mismo y si hay días en que el riesgo sube. Tienes la serie diaria de la Policía (diarios): una fila por día, con el total de víctimas y cuántas eran mujeres.",
+    hipotesis: "Los homicidios de mujeres bajan al mismo ritmo que el total.",
+    prediccion: { q: "Antes de calcular: ¿qué crees que pasa con los homicidios de mujeres?", op: ["Bajan unos 9,5 por día cada año, igual que el total", "Bajan, y en la misma proporción que el total", "No cambian", "Suben"] },
+    pasos: [
+      { q: "¿Cuánto cambian por año los homicidios de mujeres?",
+        pista: "regresion_lineal(tabla, y=lo que quieres explicar, x=[lo que usas para explicarlo]). Para ver una tendencia, x es el tiempo. Ojo con las unidades: la columna t cuenta días, así que su coeficiente es el cambio POR DÍA. Para pasarlo a años, multiplícalo por 365; puedes hacer la cuenta en una celda, por ejemplo -0.004 * 365.",
+        esq: "regresion_lineal(diarios, y=\"___\", x=[\"___\"])",
+        huecos: [
+          { q: "¿Qué quieres explicar (y)?", op: ["homicidios", "arma_fuego", "mujeres"] },
+          { q: "¿Con qué lo explicas (x)? Para una tendencia necesitas el tiempo.", op: ["fin_de_semana", "t", "festivo_fijo"] } ],
+        cer: { q: "¿Cuántos homicidios de mujeres menos hay por día con cada año que pasa?", tol: 0.06, abs: true, calc: "mujerAnual", ayuda: "Busca el coeficiente de t en la tabla de coeficientes (es el cambio por día) y multiplícalo por 365. ¿Elegiste y = mujeres y x = t?", despues: "Es mucho menos que 9,5… pero también hay muchas menos víctimas mujeres. ¿Es justo compararlos así?" },
+        dec: { q: "El R² de este modelo es muy bajo (cerca de 0,06). ¿Qué quiere decir?", op: [
+          { t: "Que no hay tendencia", ok: false, fb: "Mira el valor p del coeficiente de t: la tendencia existe y no es azar. El R² mide otra cosa." },
+          { t: "Que la tendencia existe, pero el día a día varía tanto que el tiempo explica solo un 6 % de esa variación", ok: true, fb: "Eso es. Hay una tendencia clara, pero un día cualquiera puede tener 0 o 12 víctimas: la recta no sirve para adivinar un día concreto." },
+          { t: "Que el modelo está mal hecho", ok: false, fb: "El modelo está bien; el tiempo solo explica una parte pequeña. Un R² bajo es información, no un error." } ] } },
+      { q: "¿Es justo comparar 0,8 con 9,5?",
+        pista: "Bajar 1 significa poco si hay 1.000 casos y mucho si hay 2. Compara cada caída con el promedio diario de su propia serie: (caída por año ÷ promedio diario) × 100 es el porcentaje que se pierde cada año.",
+        esq: "diarios[[\"___\", \"___\"]].mean()",
+        huecos: [{ q: "Primera serie: ¿qué promedio diario necesitas?", op: ["arma_fuego", "homicidios", "mujeres"] }, { q: "Segunda serie: ¿con qué la comparas?", op: ["mujeres", "fin_de_semana", "homicidios"] }],
+        cer: { q: "¿Qué porcentaje de su promedio diario pierden los homicidios de mujeres cada año?", unidad: "%", tol: 1.2, calc: "mujerRelativo", ayuda: "Divide tu número del paso anterior entre el promedio diario de mujeres y multiplica por 100.", despues: "El total pierde 9,5 de 54,7: cerca del 17 % al año." },
+        dec: { q: "Entonces, ¿bajan al mismo ritmo?", op: [
+          { t: "No: 0,8 es muchísimo menos que 9,5", ok: false, fb: "Compara en proporción: las mujeres son unas 4 de cada 55 víctimas diarias. Perder 0,8 de 4,4 no es poco." },
+          { t: "En proporción sí: los dos pierden cerca de una sexta parte de su promedio cada año", ok: true, fb: "Exacto: en números absolutos la caída es mucho menor, pero en proporción es parecida (cerca de 19 % frente a 17 %). Esa diferencia entre absoluto y relativo va en tu veredicto." },
+          { t: "No se puede comparar", ok: false, fb: "Sí se puede, si comparas cada caída con el tamaño de su propia serie." } ] } },
+      { q: "¿Hay días en que el riesgo sube para las mujeres?",
+        pista: "Agrega a la recta variables del calendario. Cada coeficiente dice cuántas víctimas más (o menos) hay ese tipo de día, con lo demás igual. Mira también su valor p.",
+        esq: "regresion_lineal(diarios, y=\"mujeres\", x=[\"t\", ___])",
+        huecos: [{ tipo: "lista", min: 1, max: 3, q: "Elige qué tipo de días quieres comparar (de 1 a 3).", op: ["fin_de_semana", "festivo_fijo", "quincena"] }],
+        cer: { q: "En un festivo, ¿cuántas víctimas mujeres más hay en promedio que en un día corriente?", tol: 0.15, calc: "festivoMujer", ayuda: "Incluye festivo_fijo y busca su coeficiente en la tabla.", despues: "Sobre un promedio de 4,4 por día, es más de un 50 % extra." },
+        dec: { q: "¿Qué pesa más para las mujeres?", op: [
+          { t: "El fin de semana", ok: false, fb: "Compara los coeficientes: el fin de semana suma menos de una víctima; los festivos, más de dos." },
+          { t: "Los festivos", ok: true, fb: "Sí. Para el total de homicidios el fin de semana pesa mucho; para las mujeres pesan bastante más los festivos (Año Nuevo, 31 de diciembre…). Úsalo en tu recomendación." },
+          { t: "La quincena", ok: false, fb: "Mira su valor p: para las mujeres, la quincena no se distingue del azar." } ] } },
     ],
-    veredicto: "Traduce la pendiente a «homicidios menos por día cada año». ¿Qué tan seguro estás? ¿Qué variables faltan en el modelo?" },
-  { id: "4-2", sesion: 4, titulo: "¿Qué predice una lesión grave?", concepto: "Regresión logística",
-    historia: "En violencia intrafamiliar, algunas lesiones dejan más de 30 días de incapacidad. ¿Qué características del caso aumentan esa probabilidad? Un modelo logístico estima odds ratios.",
-    hipotesis: "El mecanismo del agresor y el sexo del agresor son los mejores predictores de gravedad.",
-    pistas: [
-      { t: "¿Qué tan frecuente es la lesión grave? (tu «modelo tonto» de referencia)", c: "vif[\"lesion_grave\"].mean()" },
-      { t: "Primer modelo.", c: "regresion_logistica(vif, y=\"lesion_grave\", x=[\"sexo_victima\", \"edad_aprox\", \"sexo_agresor\"])" },
-      { t: "Añade el mecanismo.", c: "regresion_logistica(vif, y=\"lesion_grave\", x=[\"sexo_victima\", \"edad_aprox\", \"sexo_agresor\", \"mecanismo\"])" },
-      { t: "Un desbalance del 98/2 hace que la exactitud engañe. Mira sensibilidad y matriz de confusión.", c: "m = regresion_logistica(vif, y=\"lesion_grave\", x=[\"edad_aprox\", \"mecanismo\", \"escenario\"])\nm.matriz_confusion" },
-    ],
-    veredicto: "¿Qué odds ratio te llamó la atención? ¿Por qué una exactitud del 98 % puede ser inútil aquí?" },
-  { id: "4-3", sesion: 4, titulo: "¿Arma de fuego o no?", concepto: "Clasificación y matriz de confusión",
-    historia: "Sin saber el mecanismo, ¿podrías adivinar si un homicidio fue con arma de fuego a partir del contexto (zona, hora, día, edad, escenario)? Construye el clasificador y evalúalo honestamente.",
-    hipotesis: "El contexto predice bien el uso de arma de fuego.",
-    pistas: [
-      { t: "La clase positiva y su frecuencia.", c: "homicidios[\"arma_fuego\"].value_counts(normalize=True)" },
-      { t: "Modelo logístico con contexto.", c: "regresion_logistica(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"fin_de_semana\", \"escenario\"])" },
-      { t: "Añade circunstancia (cuando se conoce).", c: "regresion_logistica(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"circunstancia\", \"escenario\"])" },
-      { t: "Compara con el «modelo tonto»: ¿cuánto mejora realmente?", c: "m = regresion_logistica(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"circunstancia\", \"escenario\"])\n[m.exactitud, homicidios[\"arma_fuego\"].mean()]" },
-    ],
-    veredicto: "¿Cuál es el error más costoso: decir «arma de fuego» cuando no lo fue, o al revés? Depende de quién use el modelo: discútelo." },
+    veredicto: "¿Bajan los homicidios de mujeres al mismo ritmo que el total? ¿Qué le recomendarías a la Secretaría de la Mujer?" },
 
-  /* ---------------- SESIÓN 5 ---------------- */
-  { id: "5-1", sesion: 5, titulo: "El interrogatorio", concepto: "Árboles de decisión",
-    historia: "Un árbol de decisión es un interrogatorio: cada pregunta divide a los casos. Construye uno para predecir si el agresor en violencia intrafamiliar es hombre, y léelo en voz alta.",
-    hipotesis: "Tres preguntas bastan para acertar la mayoría de los casos.",
-    pistas: [
-      { t: "Crea la variable a predecir (sí/no) y construye un árbol de profundidad 3.", c: "vif[\"agresor_hombre\"] = vif[\"sexo_agresor\"] == \"Hombre\"\narbol_decision(vif, y=\"agresor_hombre\", x=[\"sexo_victima\", \"edad_aprox\", \"tipo_violencia\", \"factor_desencadenante\"], profundidad=3)" },
-      { t: "Sube la profundidad a 8: ¿mejora la prueba o solo el entrenamiento?", c: "arbol_decision(vif, y=\"agresor_hombre\", x=[\"sexo_victima\", \"edad_aprox\", \"tipo_violencia\", \"factor_desencadenante\"], profundidad=8)" },
-      { t: "Un árbol para predecir una cantidad: edad de la víctima de homicidio.", c: "arbol_decision(homicidios, y=\"edad_aprox\", x=[\"zona\", \"escenario\", \"mecanismo\", \"circunstancia\"], profundidad=3)" },
+  { id: "4-2", sesion: 4, titulo: "Explicar no es predecir", concepto: "Regresión logística: odds ratio, modelo tonto, sensibilidad y umbral",
+    historia: "La unidad de feminicidios de la Fiscalía quiere entender en qué se diferencian los homicidios de mujeres de los de hombres. Un ingeniero propone ir más allá: «si el modelo explica la diferencia, usémoslo como alerta para revisar los casos que van llegando».",
+    hipotesis: "Un modelo que explica bien la diferencia también sirve para detectar los casos.",
+    prediccion: { q: "Si un modelo dijera siempre «la víctima es hombre», ¿cuánto acertaría?", op: ["Cerca del 50 %", "Cerca del 70 %", "Cerca del 90 %"] },
+    pasos: [
+      { q: "¿Qué tan rara es la clase que quieres detectar?",
+        pista: "Crea una columna verdadero/falso con lo que quieres detectar. Su promedio es la proporción de «verdaderos». El «modelo tonto» siempre dice la clase más frecuente: acierta en todos los demás casos.",
+        esq: "homicidios[\"es_mujer\"] = homicidios[\"sexo_victima\"] == \"___\"\n(homicidios[\"es_mujer\"].mean() * 100).round(1)",
+        huecos: [{ q: "¿Qué valor de sexo_victima marca los casos que quieres detectar?", op: ["Hombre", "Indeterminado", "Mujer"] }],
+        cer: { q: "¿Cuánto acertaría el modelo tonto que siempre dice «hombre»?", unidad: "%", tol: 0.2, calc: "tontoHombre", ayuda: "Si el resultado es el % de mujeres, el modelo tonto acierta en todos los demás casos: 100 menos ese número." } },
+      { q: "Explicar: ¿qué características hacen más probable que la víctima sea mujer?",
+        pista: "Creamos dos columnas sencillas: si ocurrió en una vivienda y si fue con arma blanca. En la tabla, el odds ratio es la pista: mayor que 1 hace más probable «mujer»; menor que 1, menos probable; cerca de 1, no cambia nada.",
+        esq: "homicidios[\"en_vivienda\"] = homicidios[\"escenario\"] == \"Vivienda\"\nhomicidios[\"arma_blanca\"] = homicidios[\"mecanismo\"] == \"Cortopunzante\"\nm = regresion_logistica(homicidios, y=\"es_mujer\", x=[___])\nm",
+        huecos: [{ tipo: "lista", min: 1, max: 4, q: "Elige de 1 a 4 características del caso.", op: [{ v: "en_vivienda", d: "True si ocurrió en una vivienda" }, { v: "arma_blanca", d: "True si fue con arma cortopunzante" }, "arma_fuego", "edad_aprox", "fin_de_semana", "zona"] }],
+        dec: { q: "Supón que el odds ratio de en_vivienda es 3,5. ¿Qué quiere decir?", op: [
+          { t: "El 3,5 % de los homicidios en vivienda son de mujeres", ok: false, fb: "El odds ratio no es un porcentaje: dice cuántas veces se multiplican las probabilidades al pasar de «no» a «sí»." },
+          { t: "Las viviendas causan feminicidios", ok: false, fb: "El modelo encuentra una asociación, no una causa. La vivienda es donde ocurre más a menudo, no la razón por la que ocurre." },
+          { t: "Si ocurrió en una vivienda, las probabilidades (odds) de que la víctima sea mujer son unas 3,5 veces mayores", ok: true, fb: "Eso es: una asociación fuerte. El modelo explica una diferencia real entre los homicidios de hombres y de mujeres." } ] } },
+      { q: "Predecir: ¿sirve este mismo modelo como alerta?",
+        pista: "Ahora usamos cuatro variables fijas. Compara la exactitud con la del modelo tonto y luego mira la sensibilidad: de las víctimas que sí eran mujeres, ¿a cuántas detectó el modelo?",
+        esq: "m = regresion_logistica(homicidios, y=\"___\", x=[\"en_vivienda\", \"arma_blanca\", \"arma_fuego\", \"edad_aprox\"])\nm",
+        huecos: [{ q: "¿Qué quieres que el modelo prediga (y)? Las x ya están puestas.", op: [{ v: "en_vivienda", d: "Si ocurrió en una vivienda" }, { v: "es_mujer", d: "Si la víctima es mujer" }, { v: "arma_fuego", d: "Si fue con arma de fuego" }] }],
+        cer: { q: "¿Qué sensibilidad tiene el modelo?", unidad: "%", tol: 0.3, calc: "sensMujer05", ayuda: "Está en el resumen del modelo: «Sensibilidad (detecta positivos)».", despues: "Acierta más del 91 %… y casi no detecta a ninguna víctima mujer." },
+        dec: { q: "¿Lo usarías como alerta?", op: [
+          { t: "Sí: acierta más del 91 %", ok: false, fb: "El modelo tonto acierta casi lo mismo sin detectar a nadie. Una alerta que no suena no sirve." },
+          { t: "No así: explica la diferencia, pero casi nunca dice «mujer»", ok: true, fb: "Exacto: explicar no es predecir. Los odds ratios son fuertes, pero casi ninguna combinación lleva la probabilidad por encima de 50 %, así que el modelo casi nunca dice «sí»." } ] } },
+      { q: "¿Y si la alerta se vuelve más sensible?",
+        pista: "El umbral es la probabilidad a partir de la cual el modelo dice «sí». Bajarlo detecta más casos, pero también da más falsas alarmas. Prueba varios y mira la matriz de confusión: filas = realidad, columnas = lo que dijo el modelo.",
+        esq: "m = regresion_logistica(homicidios, y=\"es_mujer\", x=[\"en_vivienda\", \"arma_blanca\", \"arma_fuego\", \"edad_aprox\"], umbral=___)\nm",
+        huecos: [{ q: "¿Desde qué probabilidad debe sonar la alerta?", op: [{ v: "0.5", d: "Suena si la probabilidad es 50 % o más" }, { v: "0.3", d: "Suena desde 30 %" }, { v: "0.2", d: "Suena desde 20 %" }, { v: "0.1", d: "Suena desde 10 %" }] }],
+        cer: { q: "Con umbral 0,2, ¿qué sensibilidad tiene?", unidad: "%", tol: 0.3, calc: "sensMujer02", ayuda: "Elige 0.2 en el espacio y busca la sensibilidad en el resumen.", despues: "Detecta más, pero mira cuántas falsas alarmas aparecen en la matriz." },
+        dec: { q: "Si cada alerta la revisa a mano una fiscal especializada, ¿qué umbral eliges?", abierta: true, fb: "No hay una única respuesta: justifícala con la matriz de confusión (cuántos casos detectas y cuántas falsas alarmas tendría que revisar).", op: [{ t: "0,5" }, { t: "0,3" }, { t: "0,2" }, { t: "0,1" }] },
+        nota: { q: "¿Por qué ese umbral? Usa los números de la matriz de confusión." } },
     ],
-    veredicto: "Escribe la regla principal del árbol en lenguaje natural. ¿Qué diferencia hay entre entrenamiento y prueba y por qué importa?" },
-  { id: "5-2", sesion: 5, titulo: "La sabiduría del bosque", concepto: "Random forest e importancia de variables",
-    historia: "Cientos de árboles, cada uno con una muestra distinta, votan. El bosque suele acertar más que un árbol, pero ya no puedes leerlo. ¿Qué ganas y qué pierdes?",
-    hipotesis: "El bosque supera al árbol y a la regresión logística en exactitud.",
-    pistas: [
-      { t: "Bosque para arma de fuego en homicidios.", c: "bosque_aleatorio(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"escenario\", \"circunstancia\", \"fin_de_semana\", \"hora_inicio\"], arboles=40)" },
-      { t: "Compara con un solo árbol.", c: "arbol_decision(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"escenario\", \"circunstancia\", \"fin_de_semana\", \"hora_inicio\"], profundidad=4)" },
-      { t: "Grafica la importancia de variables.", c: "b = bosque_aleatorio(homicidios, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"escenario\", \"circunstancia\", \"fin_de_semana\", \"hora_inicio\"], arboles=40)\ngrafico_barras(b.importancia.set_index(\"variable\")[\"importancia\"], horizontal=True, titulo=\"Importancia de variables\")" },
+    veredicto: "¿Sirve el modelo para explicar? ¿Y para alertar? ¿Qué umbral recomendarías y qué costo tiene?" },
+
+  { id: "4-3", sesion: 4, titulo: "El modelo humano", concepto: "Clasificación: modelo tonto, fuga de información y el costo de cada error",
+    historia: "Dinámica de clase: sin saber el mecanismo, ¿se puede adivinar si un homicidio fue con arma de fuego? Cada grupo elige tres variables del contexto, apuesta cuánto acertará su modelo y lo compara con los demás grupos.",
+    hipotesis: "El contexto del hecho (lugar, hora, víctima) predice bien si hubo arma de fuego.",
+    prediccion: { q: "¿Cuánto crees que acertará tu modelo de tres variables?", op: ["Menos que el modelo tonto", "Un poco más que el modelo tonto (1 a 5 puntos)", "Mucho más (más de 10 puntos)"] },
+    pasos: [
+      { q: "¿Cuánto acierta el modelo tonto?",
+        pista: "arma_fuego es verdadero/falso: su promedio es la proporción de homicidios con arma de fuego. El modelo tonto siempre dice «arma de fuego».",
+        esq: "(homicidios[\"___\"].mean() * 100).round(1)",
+        huecos: [{ q: "¿Qué columna dice si hubo arma de fuego?", op: ["fin_de_semana", "arma_fuego", "zona"] }],
+        cer: { q: "¿Cuánto acierta el modelo tonto?", unidad: "%", tol: 0.2, calc: "tontoArma" } },
+      { q: "Tu modelo: elige tres variables del contexto.",
+        pista: "Lee la descripción de cada variable y elige tres que creas que delatan un arma de fuego. En el resultado, compara la «Exactitud en prueba» con el modelo tonto que aparece al lado.",
+        esq: "m = regresion_logistica(homicidios, y=\"arma_fuego\", x=[___])\nm",
+        huecos: [{ tipo: "lista", min: 3, max: 3, q: "Elige exactamente tres variables.", op: ["zona", "edad_aprox", "fin_de_semana", "escenario", "rango_hora", "sexo_victima", "ciclo_vital", "departamento", "mecanismo"] }],
+        dato: { q: "¿Qué exactitud en prueba obtuvo tu modelo?", ph: "p. ej. 72,5 %" },
+        dec: { q: "Un grupo usó «mecanismo» y obtuvo 100 %. ¿Ganó?", op: [
+          { t: "Sí: es el mejor modelo de la clase", ok: false, fb: "Mira qué dice «mecanismo»: «Proyectil de arma de fuego». El modelo no adivinó nada: leyó la respuesta. Eso se llama fuga de información." },
+          { t: "No: «mecanismo» ya contiene la respuesta, así que el modelo no adivina nada", ok: true, fb: "Exacto: es fuga de información. Antes de celebrar una exactitud altísima, pregunta si alguna variable es la respuesta con otro nombre." } ] } },
+      { q: "¿En qué se equivoca?",
+        pista: "Probemos un modelo con escenario, franja horaria y sexo de la víctima. La pregunta es: de los homicidios SIN arma de fuego, ¿a cuántos reconoció el modelo como «no»? Elige qué parte del resultado responde eso (si sale un número entre 0 y 1, multiplícalo por 100).",
+        esq: "m = regresion_logistica(homicidios, y=\"arma_fuego\", x=[\"escenario\", \"rango_hora\", \"sexo_victima\"])\nm.___",
+        huecos: [{ q: "¿Qué parte del resultado quieres ver?", op: [{ v: "exactitud", d: "Qué parte de todos los casos acierta" }, { v: "sensibilidad", d: "De los que SÍ fueron con arma, cuántos detecta" }, { v: "especificidad", d: "De los que NO fueron con arma, cuántos reconoce" }, { v: "matriz_confusion", d: "La tabla con aciertos y los dos tipos de error" }] }],
+        cer: { q: "¿Qué especificidad tiene este modelo?", unidad: "%", tol: 0.3, calc: "especArma", ayuda: "Elige especificidad (si sale 0,11, eso es 11 %). También sale de la matriz: en la fila «real: negativo», qué parte quedó en «pred: negativo».", despues: "Casi a todo le dice «arma de fuego»: por eso acierta casi lo mismo que el modelo tonto." },
+        dec: { q: "El laboratorio de balística usaría el modelo para decidir qué casos analizar primero. ¿Qué error le cuesta más?", abierta: true, fb: "Depende de quién use el modelo: escríbelo en tu veredicto con un ejemplo.", op: [{ t: "Decir «arma de fuego» cuando no lo fue: se pierde tiempo en un caso" }, { t: "Decir «no» cuando sí lo fue: un caso con arma se queda sin analizar" }] } },
+      { q: "¿Y si le das la circunstancia?",
+        pista: "La circunstancia (riña, ajuste de cuentas…) es muy informativa, pero acuérdate de la sesión 1: falta en la mayoría de los casos.",
+        esq: "m2 = regresion_logistica(homicidios, y=\"arma_fuego\", x=[\"escenario\", \"rango_hora\", \"sexo_victima\", \"___\"])\nm2",
+        huecos: [{ q: "¿Qué cuarta variable le agregas?", op: ["zona", "circunstancia", "mecanismo"] }],
+        cer: { q: "¿Qué exactitud en prueba tiene ahora?", unidad: "%", tol: 0.3, calc: "exactArmaCirc", ayuda: "¿Agregaste circunstancia? Si elegiste mecanismo, vuelve a leer la decisión del paso 2." },
+        dec: { q: "Mejora. ¿Qué problema tiene?", op: [
+          { t: "Ninguno: más variables, mejor modelo", ok: false, fb: "Mira la categoría de referencia: «Sin información». En dos de cada tres casos el modelo no recibe la circunstancia, así que ayuda justo donde ya se sabe más." },
+          { t: "La circunstancia falta en dos de cada tres casos: el modelo mejora sobre todo donde ya sabemos más", ok: true, fb: "Exacto. Un modelo es tan bueno como el registro que lo alimenta: es el tema de la próxima sesión." } ] } },
     ],
-    veredicto: "Si tuvieras que explicarle el modelo a un juez, ¿usarías el árbol o el bosque? ¿Por qué?" },
-  { id: "5-3", sesion: 5, titulo: "El modelo que hereda el sesgo", concepto: "Ética y límites",
-    historia: "Imagina que el modelo de arma de fuego se usara para «priorizar» casos. Revisa qué variables usa, cuáles tienen «Sin información» y qué pasaría con un municipio donde la Policía registra mal la circunstancia.",
-    hipotesis: "El modelo es neutral porque solo usa datos.",
-    pistas: [
-      { t: "¿Cuánto «Sin información» hay en circunstancia según el departamento? (True/False promedia como porcentaje)", c: "homicidios[\"sin_info\"] = homicidios[\"circunstancia\"] == \"Sin información\"\n(homicidios.groupby(\"departamento\")[\"sin_info\"].mean() * 100).round(1).sort_values(ascending=False).head(12)" },
-      { t: "Entrena el modelo solo con casos bien documentados y evalúalo.", c: "bien = homicidios[homicidios[\"sin_info\"] == False]\nregresion_logistica(bien, y=\"arma_fuego\", x=[\"zona\", \"edad_aprox\", \"circunstancia\", \"escenario\"])" },
-      { t: "¿La proporción de arma de fuego cambia entre casos documentados y no documentados?", c: "homicidios.groupby(\"sin_info\")[\"arma_fuego\"].mean()" },
+    veredicto: "¿Predice el contexto el uso de arma de fuego? ¿Cuánto mejoró tu grupo frente al modelo tonto y qué error es más costoso?" },
+
+  /* ---------------- SESIÓN 5 · Árboles, bosques y límites (formato «pensar antes de insertar») ---------------- */
+  { id: "5-1", sesion: 5, titulo: "¿Riña o ajuste de cuentas?", concepto: "Árboles de decisión: leer reglas y sobreajuste",
+    historia: "Un fiscal tiene cientos de homicidios sin la circunstancia registrada. Pregunta si con lo que sí queda en el expediente (el arma, el día, la hora, el lugar) se podría distinguir una riña de un ajuste de cuentas. Construye el interrogatorio con los 2.132 casos en que la circunstancia sí se conoce.",
+    hipotesis: "Con dos o tres preguntas se puede distinguir una riña de un ajuste de cuentas.",
+    prediccion: { q: "¿Cuál crees que será la primera pregunta del árbol?", op: ["¿Fue con arma de fuego?", "¿Fue en fin de semana?", "¿Fue de madrugada?", "¿Fue en un bar o un lugar con alcohol?", "¿La víctima era joven?"] },
+    pasos: [
+      { q: "¿Cuántas de estas muertes fueron riñas?",
+        pista: "El árbol solo puede aprender de casos en los que se sabe la respuesta. Quédate con las dos circunstancias que quieres distinguir; luego se crea la columna que el árbol va a predecir (verdadero si fue riña). Su promedio es la proporción de riñas.",
+        esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([___])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\n(dos[\"es_rina\"].mean() * 100).round(1)",
+        huecos: [{ tipo: "lista", min: 2, max: 2, q: "¿Con qué dos circunstancias se queda la tabla?", op: [{ v: "Sin información", d: "No se sabe qué pasó" }, { v: "Riña" }, { v: "Atraco callejero o intento de", d: "Robo en la calle" }, { v: "Venganza o ajuste de cuentas" }, { v: "Otro" }] }],
+        cer: { q: "¿Cuánto acertaría un modelo que siempre dice «ajuste de cuentas»?", unidad: "%", tol: 0.5, calc: "tontoRina", ayuda: "El resultado es el % de riñas. El modelo tonto acierta en todos los demás casos. ¿Elegiste riña y ajuste de cuentas?", despues: "Ese es el número que el árbol tiene que superar." } },
+      { q: "Arma tu interrogatorio de dos preguntas.",
+        pista: "Un árbol de profundidad 2 hace dos preguntas seguidas. Léelo de arriba abajo: cada «¿…?» divide los casos en Sí y No, y cada hoja dice qué predice y qué % de sus casos son riñas.",
+        esq: "arbol_decision(dos, y=\"es_rina\", x=[___], profundidad=2)",
+        huecos: [{ tipo: "lista", min: 2, max: 4, q: "Elige de 2 a 4 pistas que el árbol pueda usar.", op: ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "edad_aprox", "sexo_victima"] }],
+        dec: { q: "Compara la exactitud en prueba con la del modelo tonto (cerca de 63 %).", abierta: true, op: [
+          { t: "Mejora más de 10 puntos", fb: "Bien. Mira cuál fue la primera pregunta: ¿coincide con tu apuesta?" },
+          { t: "Mejora poco o nada", fb: "Prueba agregando arma_fuego (o quitándola, para ver cuánto pesa). El árbol solo puede preguntar por lo que le das." } ] },
+        nota: { q: "Escribe la regla principal del árbol en una frase: «Si …, entonces …»." } },
+      { q: "¿Y si el interrogatorio sigue preguntando?",
+        pista: "Ahora el árbol tiene seis pistas fijas y tú decides cuántas preguntas seguidas puede hacer (profundidad). Compara la exactitud en entrenamiento (los casos que vio) con la de prueba (casos nuevos).",
+        esq: "x6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\narbol_decision(dos, y=\"es_rina\", x=x6, profundidad=___)",
+        huecos: [{ q: "¿Cuántas preguntas seguidas puede hacer?", op: [{ v: "2", d: "Se lee en voz alta" }, { v: "4" }, { v: "8" }, { v: "15", d: "Ya nadie lo puede leer" }] }],
+        cer: { q: "Con profundidad 15, ¿cuántos puntos de diferencia hay entre entrenamiento y prueba?", tol: 0.4, calc: "brecha15", ayuda: "Resta: exactitud en entrenamiento menos exactitud en prueba.", despues: "Acierta más en los casos que ya vio y menos en los nuevos: memorizó." },
+        dec: { q: "¿Qué profundidad le presentarías al fiscal?", op: [
+          { t: "15: es la que más acierta en entrenamiento", ok: false, fb: "Entrenamiento son los casos que el árbol ya vio. En casos nuevos (prueba), 15 acierta menos que 2. Eso es sobreajuste." },
+          { t: "2 o 3: acierta igual o más en casos nuevos y se puede leer", ok: true, fb: "Exacto: más preguntas no siempre es mejor. Un árbol corto se puede explicar y aquí además acierta más en casos nuevos." } ] } },
     ],
-    veredicto: "¿Qué pasaría si el modelo se usa donde el registro es peor? Escribe tres reglas para usar un modelo predictivo de forma responsable." },
+    veredicto: "¿Se puede distinguir una riña de un ajuste de cuentas con dos o tres preguntas? ¿Cuál es la regla y cuánto se equivoca?" },
+
+  { id: "5-2", sesion: 5, titulo: "El bosque contra el árbol", concepto: "Bosque aleatorio, importancia de variables y legibilidad",
+    historia: "Un analista dice: «el bosque siempre gana; olvidemos el árbol». Pon a competir los dos en la misma pregunta (¿riña o ajuste de cuentas?) y decide qué ganas y qué pierdes con cada uno.",
+    hipotesis: "El bosque acierta claramente más que un solo árbol.",
+    prediccion: { q: "¿Cuántos puntos crees que le saca el bosque al árbol?", op: ["Ninguno o casi ninguno", "Entre 2 y 5 puntos", "Más de 5 puntos"] },
+    pasos: [
+      { q: "La competencia: bosque contra árbol, con las mismas seis pistas.",
+        pista: "Se corren los dos con las mismas seis pistas: un árbol de tres preguntas y un bosque de muchos árboles que votan. Compara sus exactitudes en prueba.",
+        esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([\"Riña\", \"Venganza o ajuste de cuentas\"])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\nx6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\narbol = arbol_decision(dos, y=\"es_rina\", x=x6, profundidad=3)\nbosque = bosque_aleatorio(dos, y=\"es_rina\", x=x6, arboles=___)\nprint(\"Árbol:\", round(arbol.exactitud * 100, 1), \"%  ·  Bosque:\", round(bosque.exactitud * 100, 1), \"%\")",
+        huecos: [{ q: "¿Cuántos árboles votan en el bosque?", op: [{ v: "10", d: "Rápido" }, { v: "40", d: "Lo usual en el laboratorio" }, { v: "100", d: "Tarda unos segundos más" }] }],
+        cer: { q: "¿Cuántos puntos le saca el bosque al árbol? (bosque menos árbol)", tol: 0.25, calc: "bosqueArbol", ayuda: "Resta las dos exactitudes que aparecen: la del bosque menos la del árbol." } },
+      { q: "¿Por qué no gana?",
+        pista: "La importancia dice cuánto usó el modelo cada variable para separar los casos (entre todas suman 100 %).",
+        esq: "grafico_barras(___.importancia, horizontal=True, titulo=\"¿Qué miró el modelo?\")",
+        huecos: [{ q: "¿De qué modelo quieres ver la importancia? Puedes mirar los dos.", op: [{ v: "bosque", d: "El bosque del paso anterior" }, { v: "arbol", d: "El árbol de tres preguntas" }] }],
+        dec: { q: "¿Por qué el bosque casi no le gana al árbol aquí?", op: [
+          { t: "Porque 40 árboles son muy pocos", ok: false, fb: "Puedes probar con 100: el resultado casi no cambia. El problema no es cuántos árboles votan." },
+          { t: "Porque el bosque está mal programado", ok: false, fb: "Hace lo que debe: votar. Si todos los árboles ven lo mismo, votan lo mismo." },
+          { t: "Porque una sola pregunta (¿arma de fuego?) ya dice casi todo y a los demás árboles les queda poco por añadir", ok: true, fb: "Exacto: cuando una variable domina, un árbol corto basta. El bosque brilla cuando la información está repartida entre muchas variables." } ] } },
+      { q: "Quítale el arma: ¿ahora quién gana?",
+        pista: "Deja las cinco pistas que NO son el arma. Sin arma_fuego, la información queda repartida entre el día, la hora, el lugar y la zona.",
+        huecos: [{ tipo: "lista", min: 5, max: 5, q: "Marca las cinco pistas que se quedan.", op: ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "edad_aprox"] }],
+        esq: "x5 = [___]\narbol5 = arbol_decision(dos, y=\"es_rina\", x=x5, profundidad=3)\nbosque5 = bosque_aleatorio(dos, y=\"es_rina\", x=x5, arboles=40)\nprint(\"Árbol:\", round(arbol5.exactitud * 100, 1), \"%  ·  Bosque:\", round(bosque5.exactitud * 100, 1), \"%\")",
+        cer: { q: "¿Cuántos puntos le saca ahora el bosque al árbol?", tol: 0.25, calc: "bosqueArbolSin", ayuda: "¿Dejaste por fuera a arma_fuego? Resta: bosque menos árbol.", despues: "Ahora sí gana, aunque los dos aciertan bastante menos que con el arma." },
+        dec: { q: "Un juez pide entender por qué el modelo dice «riña» en un caso concreto. ¿Qué le muestras?", abierta: true, fb: "Defiéndelo en tu veredicto: lo que ganas en exactitud frente a lo que pierdes en explicación.", op: [{ t: "El árbol: lo puede leer" }, { t: "El bosque: acierta más" }, { t: "Los dos, explicando la diferencia" }] } },
+    ],
+    veredicto: "¿Siempre gana el bosque? ¿Cuándo usarías cada uno?" },
+
+  { id: "5-3", sesion: 5, titulo: "¿Llenamos los vacíos?", concepto: "Ética: el modelo hereda el registro y no se equivoca igual con todos",
+    historia: "La Fiscalía propone usar el bosque del expediente anterior para «llenar» la circunstancia de los homicidios que no la tienen y así reportar cuántos fueron riñas y cuántos ajustes de cuentas. Antes de aprobarlo, revisa de dónde aprendió el modelo y con quién se equivoca.",
+    hipotesis: "Si el modelo acierta 82 %, se puede usar para llenar la circunstancia que falta.",
+    prediccion: { q: "¿Crees que funcionaría igual de bien en los casos sin información?", op: ["Sí, acertaría parecido", "Peor: esos casos pueden ser distintos", "No se puede saber sin revisar"] },
+    pasos: [
+      { q: "¿De dónde aprendió el modelo?",
+        pista: "Cuenta, por departamento, cuántos homicidios tienen la circunstancia registrada (True) y cuántos no (False). El modelo solo pudo aprender de los True; tendría que llenar los False.",
+        esq: "homicidios[\"registrada\"] = homicidios[\"circunstancia\"] != \"Sin información\"\ntabla = pd.crosstab(homicidios[\"departamento\"], homicidios[\"registrada\"])\ntabla.sort_values(\"___\", ascending=False)",
+        huecos: [{ q: "¿Por qué columna ordenas la tabla?", op: [{ v: "True", d: "Casos con la circunstancia: de ellos aprende el modelo" }, { v: "False", d: "Casos sin la circunstancia: el modelo tendría que llenarlos" }] }],
+        cer: { q: "En el Putumayo, ¿de cuántos casos con la circunstancia registrada podría aprender el modelo?", tol: 0.5, calc: "putumayoReg", ayuda: "Busca la fila Putumayo y la columna True.", despues: "Y tendría que llenar más de 120 casos de allí." },
+        dec: { q: "Para llenar esos casos del Putumayo, el modelo usaría lo que aprendió de 12 casos de allí y de miles de otros departamentos. ¿Qué está suponiendo?", op: [
+          { t: "Nada: los datos son los datos", ok: false, fb: "El modelo aprendió sobre todo de los departamentos que sí registran. Aplicarlo al Putumayo supone que allí la violencia se ve igual." },
+          { t: "Que en el Putumayo las riñas y los ajustes se parecen a los de los departamentos que sí registran", ok: true, fb: "Eso es: el modelo hereda el registro. Lo que no se anotó no lo puede aprender, y lo rellena con lo que vio en otros lugares." } ] } },
+      { q: "¿Se equivoca igual con todos?",
+        pista: "Guardamos lo que dice el bosque para cada caso y si acertó. Luego comparamos el % de aciertos por grupo. Mira también cuántos casos tiene cada grupo: con pocos casos, los porcentajes saltan mucho.",
+        esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([\"Riña\", \"Venganza o ajuste de cuentas\"])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\nx6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\nbosque = bosque_aleatorio(dos, y=\"es_rina\", x=x6, arboles=40)\ndos[\"dice_rina\"] = bosque.predicciones >= 0.5\ndos[\"acierta\"] = dos[\"dice_rina\"] == dos[\"es_rina\"]\n(dos.groupby(\"___\")[\"acierta\"].mean() * 100).round(1)",
+        huecos: [{ q: "¿Por qué grupo quieres comparar los aciertos?", op: ["zona", "sexo_victima", "ciclo_vital", "fin_de_semana"] }],
+        cer: { q: "¿Qué porcentaje acierta con las víctimas adultas mayores?", unidad: "%", tol: 0.4, calc: "aciertoMayor", ayuda: "Elige ciclo_vital y busca «Adulto Mayor».", despues: "Frente a más del 80 % con jóvenes y adultos. Ojo: son solo 58 casos." },
+        dec: { q: "Con los adultos mayores acierta bastante menos. ¿Qué harías antes de usarlo?", op: [
+          { t: "Nada: en promedio acierta 82 %", ok: false, fb: "El promedio esconde a los grupos pequeños. Un caso con víctima adulta mayor tiene casi el doble de probabilidad de quedar mal clasificado." },
+          { t: "Reportar el acierto por grupo y no usarlo donde falla más o donde hay muy pocos casos", ok: true, fb: "Eso es lo que se le reclamó a COMPAS: no basta con la exactitud global, hay que mirar a quién le caen los errores." } ] } },
+      { q: "Tus reglas para la Fiscalía.",
+        nota: { q: "Escribe tres reglas para usar (o no usar) este modelo de forma responsable." } },
+    ],
+    veredicto: "¿Aprobarías usar el modelo para llenar la circunstancia que falta? ¿Con qué reglas?" },
 ];
+
 
 /* ===================== App ===================== */
 const DATASETS = [
@@ -2002,7 +2172,7 @@ const REFERENCIA = [
   ["Agrupar y cruzar", [["df.groupby(\"g\")[\"v\"].mean()", "promedio por grupo"], ["df.groupby(\"g\").size()", "conteo por grupo"], ["df.groupby(\"g\")[\"v\"].agg([\"mean\", \"count\"])", "varias funciones"], ["pd.crosstab(df[\"a\"], df[\"b\"])", "tabla cruzada"], ["pd.crosstab(df[\"a\"], df[\"b\"], normalize=\"index\")", "% por fila"], ["df.sort_values(\"col\", ascending=False)", "ordenar"], ["pd.cut(df[\"edad_aprox\"], bins=[0, 17, 29, 59, 120], labels=[\"menor\", \"joven\", \"adulto\", \"mayor\"])", "agrupar números en rangos"]]],
   ["Graficar", [["grafico_barras(serie, horizontal=True, titulo=\"...\")", "barras"], ["grafico_lineas(serie)", "líneas"], ["histograma(df[\"edad_aprox\"], bins=20)", "histograma"], ["mapa_calor(tabla_cruzada)", "mapa de calor"], ["mapa_calor(tabla_cruzada, normalize=\"index\")", "mapa de calor en % por fila (o \"columns\", \"all\")"], ["dispersion(df, x=\"a\", y=\"b\", color=\"g\", tendencia=True)", "dispersión"], ["cajas(df, valor=\"v\", grupo=\"g\")", "diagrama de cajas"], ["serie.plot(kind=\"bar\")", "estilo pandas: bar, barh, line, pie, hist"]]],
   ["Pruebas", [["prueba_t(grupo1, grupo2)", "comparar dos medias"], ["anova(df, valor=\"v\", grupo=\"g\")", "comparar varias medias"], ["chi_cuadrado(tabla_cruzada)", "asociación entre categorías"], ["correlacion(df[\"a\"], df[\"b\"])", "r de Pearson"], ["intervalo_confianza(serie)", "IC 95 %"], ["tasa(conteo, poblacion, por=100000)", "tasas"]]],
-  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
+  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\"], umbral=0.2)", "umbral: con qué probabilidad dice «sí»"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
 ];
 
 const store = { get(k, d) { try { const v = localStorage.getItem("lab:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem("lab:" + k, JSON.stringify(v)); } catch {} } };
@@ -2098,7 +2268,7 @@ function renderStat(r, out) {
   const box = document.createElement("div"); box.className = "stat";
   const h = document.createElement("div"); h.className = "st-title"; h.textContent = r.title; box.append(h);
   const t = document.createElement("table"); t.className = "kv"; for (const [k, v] of r.rows) { const tr = document.createElement("tr"); const a = document.createElement("td"); a.textContent = k; const b = document.createElement("td"); b.textContent = typeof v === "number" ? fmtNum(v) : String(v); tr.append(a, b); t.append(tr); } box.append(t);
-  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; d.append(c, p); } box.append(d); }
+  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; const hojas = (x.text.match(/predice/g) || []).length; if (x.text.split("\n").length > 40) { const det = document.createElement("details"); const sm = document.createElement("summary"); sm.className = "caption"; sm.style.cursor = "pointer"; sm.textContent = `${x.caption || "Reglas"} · ${hojas} hojas: demasiadas para leerlas en voz alta (clic para verlas)`; det.append(sm, p); d.append(det); } else d.append(c, p); } box.append(d); }
   if (r.interp) { const i = document.createElement("div"); i.className = "interp"; i.textContent = r.interp; box.append(i); }
   out.append(box);
 }
@@ -2157,7 +2327,7 @@ function loadNotebook() {
 }
 function starterCells(s) {
   const first = ["# Bienvenido al laboratorio. Cada celda es Python real (pandas simplificado).\n# Ejecuta con el botón ▶ o con Shift+Enter. Las bases ya están cargadas:\n# homicidios, vif, policia, diarios, municipios, departamentos\nhomicidios.head()"];
-  const bySession = { 1: ["homicidios.shape", "homicidios[\"sexo_victima\"].value_counts()"], 2: ["diarios.head()", "diarios.groupby(\"dia_semana\")[\"homicidios\"].mean().round(1)"], 3: ["# Sesión 3: en cada paso del expediente armas el código eligiendo qué va en cada espacio.\n# «Llevar al cuaderno y ejecutar» lo trae aquí. Luego miras el resultado y decides.\nmunicipios.head()"], 4: ["regresion_lineal(diarios, y=\"homicidios\", x=[\"t\", \"fin_de_semana\"])"], 5: ["vif[\"agresor_hombre\"] = vif[\"sexo_agresor\"] == \"Hombre\"\narbol_decision(vif, y=\"agresor_hombre\", x=[\"sexo_victima\", \"edad_aprox\", \"tipo_violencia\"], profundidad=3)"] };
+  const bySession = { 1: ["homicidios.shape", "homicidios[\"sexo_victima\"].value_counts()"], 2: ["diarios.head()", "diarios.groupby(\"dia_semana\")[\"homicidios\"].mean().round(1)"], 3: ["# Sesión 3: en cada paso del expediente armas el código eligiendo qué va en cada espacio.\n# «Llevar al cuaderno y ejecutar» lo trae aquí. Luego miras el resultado y decides.\nmunicipios.head()"], 4: ["# Sesión 4: en cada paso del expediente armas el código eligiendo qué va en cada espacio.\n# «Llevar al cuaderno y ejecutar» lo trae aquí. Luego miras el resultado y decides.\ndiarios.head()"], 5: ["# Sesión 5: en cada paso del expediente armas el código eligiendo qué va en cada espacio.\n# «Llevar al cuaderno y ejecutar» lo trae aquí. Luego miras el resultado y decides.\nhomicidios[\"circunstancia\"].value_counts().head(6)"] };
   return [...first, ...(bySession[s] || []), ""];
 }
 function insertCode(code, run = false) {
@@ -2280,7 +2450,7 @@ function renderExpediente(m, body, d) {
     const ph = hEl("div", "ph"); ph.append(hEl("span", "k", String(i + 1)), hEl("span", "q", p.q)); if (hecho && gatesOf(p).length) ph.append(hEl("span", "ok", "✓")); card.append(ph);
     const inner = hEl("div", "inner"); const tools = hEl("div", "tools");
     if (p.pista) { const b = hBtn(ps.pista ? "Ocultar pista" : "Ver pista"); b.onclick = () => { ps.pista = !ps.pista; save(); redraw(); }; tools.append(b); }
-    if (p.esq && !p.huecos) { const conHuecos = /___/.test(p.esq); const b = hBtn(conHuecos ? "Insertar esqueleto" : "Insertar código"); b.title = conHuecos ? "Inserta el código con espacios ___ que debes completar" : "Inserta el código en el cuaderno"; b.onclick = () => { ps.esq = (ps.esq || 0) + 1; save(); insertCode(p.esq); }; tools.append(b); }
+    if (p.esq && !p.huecos) { const conHuecos = /___/.test(p.esq); const b = hBtn(conHuecos ? "Insertar esqueleto" : "Llevar al cuaderno y ejecutar", conHuecos ? "" : "primary"); b.title = conHuecos ? "Inserta el código con espacios ___ que debes completar" : "Pone el código en el cuaderno y lo ejecuta"; b.onclick = () => { ps.esq = (ps.esq || 0) + 1; save(); if (conHuecos) insertCode(p.esq); else llevarAlCuaderno(`${m.id}:${i}`, p.esq, p.esq); }; tools.append(b); }
     if (p.codigo) { const b = hBtn("Insertar código del colega"); b.onclick = () => insertCode(p.codigo); tools.append(b); }
     inner.append(tools);
     if (p.pista && ps.pista) inner.append(hEl("div", "pista-txt", p.pista));
@@ -2388,7 +2558,7 @@ function renderGate(m, p, ps, g, save, redraw) {
     const tries = ps.cerTries || 0;
     if (tries) box.append(hEl("div", "fb no", `No coincide con lo que da la base (${tries} ${tries === 1 ? "intento" : "intentos"}). ${c.ayuda || ""}`));
     if (tries >= 3) { const s = hBtn("Seguir sin resolver"); s.onclick = () => { ps.cerSalto = true; save(); redraw(); }; box.append(s); }
-    const go = () => { const n = parseNum(inp.value); if (!isNum(n)) { aviso(box, "Escribe solo el número (puedes usar coma decimal).", "neutral"); return; } let ref; try { ref = CHECKS[c.calc](); } catch (e) { ref = NaN; } const cands = c.unidad === "%" && Math.abs(n) <= 1 && ref > 1 ? [n, n * 100] : [n]; ps.cerTries = tries + 1; if (cands.some((x) => Math.abs(x - ref) <= (c.tol ?? 0.01))) { ps.cerOk = true; ps.cerVal = cands.find((x) => Math.abs(x - ref) <= (c.tol ?? 0.01)); } save(); redraw(); };
+    const go = () => { const n = parseNum(inp.value); if (!isNum(n)) { aviso(box, "Escribe solo el número (puedes usar coma decimal).", "neutral"); return; } let ref; try { ref = CHECKS[c.calc](); } catch (e) { console.error(e); ref = NaN; } const refs = [].concat(ref).filter(isNum); const vale = (x) => refs.some((r) => Math.abs((c.abs ? Math.abs(x) : x) - (c.abs ? Math.abs(r) : r)) <= (c.tol ?? 0.01)); const cands = c.unidad === "%" && Math.abs(n) <= 1 && refs.some((r) => Math.abs(r) > 1) ? [n, n * 100] : [n]; ps.cerTries = tries + 1; const bien = cands.find(vale); if (bien !== undefined) { ps.cerOk = true; ps.cerVal = bien; } save(); redraw(); };
     b.onclick = go; inp.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
     return box;
   }
@@ -2542,9 +2712,9 @@ PROHIBIDO (aquí no existe): importar librerías (sklearn, matplotlib, seaborn, 
   pca(tabla[[cols]]) → .PC1 .PC2 .cargas .varianza_explicada .componentes (para graficar: tabla["PC1"] = c.PC1; tabla["PC2"] = c.PC2; dispersion(tabla, x="PC1", y="PC2", color="grupo"))
   chi_cuadrado(tabla) → .chi2 .p .v_cramer .residuos; correlacion(a, b) → .r .p
   regresion_lineal(df, y=, x=[...]) → .coeficientes .r2 .mae .predicciones
-  regresion_logistica(df, y=binaria, x=[...]) → .coeficientes .exactitud .sensibilidad .especificidad .matriz_confusion
-  arbol_decision(df, y=, x=[...], profundidad=3) → .exactitud .importancia .matriz_confusion .arbol (si y es numérica: .r2 .mae)
-  bosque_aleatorio(df, y=, x=[...], arboles=40) → .exactitud .importancia .matriz_confusion (si y es numérica: .r2 .mae). No tiene .coeficientes.
+  regresion_logistica(df, y=binaria, x=[...], umbral=0.5) → .coeficientes (con odds_ratio) .exactitud .sensibilidad .especificidad .precision .matriz_confusion .probabilidades
+  arbol_decision(df, y=, x=[...], profundidad=3) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .arbol (si y es numérica: .r2 .mae)
+  bosque_aleatorio(df, y=, x=[...], arboles=40) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .predicciones (probabilidad de «sí») (si y es numérica: .r2 .mae). No tiene .coeficientes. grafico_barras(bosque, horizontal=True) grafica la importancia.
   Escribir solo el nombre del resultado (p. ej. modelo) en la última línea muestra su resumen completo.
 - Bases cargadas (no hace falta leer archivos): ${DATASETS.map((d) => `${d.name} (${d.titulo}: columnas ${state.data[d.name] ? state.data[d.name].columns.join(", ") : ""})`).join("; ")}.
 - Para mostrar un resultado déjalo como ÚLTIMA línea de la celda (como Jupyter). print() también muestra tablas y textos f"...".
