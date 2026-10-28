@@ -1338,6 +1338,23 @@ function regresion_lineal(df, kw = {}) {
     [{ type: "figure", fig: xcols.length === 1 && encoders[0] && encoders[0].type === "num" ? scatterFigure(df, xcols[0], y, { tendencia: true, titulo: `Los datos y la recta ajustada (pendiente ${fmtNum(redondeoSig(beta[1]))})` }) : figCoefs(names, beta, pvals, y) }, { type: "table", df: coefDF, caption: "Coeficientes" }]);
 }
 
+function tendencia_anual(df, kw = {}, pos = []) {
+  if (!(df instanceof DataFrame)) throw new LabError("tendencia_anual(diarios, y=[\"homicidios\", \"mujeres\"])", "Recibe la serie diaria y las columnas que quieres comparar.");
+  let ys = kw.y ?? pos[0]; if (typeof ys === "string") ys = [ys];
+  if (!Array.isArray(ys) || !ys.length) throw new LabError("Indica qué series comparar: y=[\"homicidios\", \"mujeres\"].");
+  const x = kw.x ?? "t"; const por = kw.por ?? 365;
+  if (!df.columns.includes(x)) throw new LabError(`La tabla no tiene la columna «${x}» (el tiempo contado en días).`, "Usa la serie diaria: diarios.");
+  const filas = ys.map((y) => {
+    if (!df.columns.includes(y)) { const sug = closest(String(y), df.columns); throw new LabError(`La columna «${y}» no existe.`, sug ? `¿Quisiste decir «${sug}»?` : undefined); }
+    const r = regresion_lineal(df, { y, x: [x] }); const c = r.fields.coeficientes; const b = c.data.coeficiente[c.data.variable.indexOf(x)]; const prom = df.col(y).mean();
+    return { y, prom, b, anio: b * por, pct: 100 * b * por / prom };
+  });
+  const r2 = (v) => Math.round(v * 100) / 100, r1 = (v) => Math.round(v * 10) / 10;
+  const tabla = new DataFrame({ serie: filas.map((f) => f.y), promedio_diario: filas.map((f) => r2(f.prom)), cambio_por_dia: filas.map((f) => redondeoSig(f.b)), cambio_por_anio: filas.map((f) => r2(f.anio)), pct_del_promedio_por_anio: filas.map((f) => r1(f.pct)) });
+  const fig = makeFigure({ type: "coefs", items: filas.map((f) => ({ label: f.y, value: f.pct, texto: `${f.pct > 0 ? "+" : ""}${fmtNum(r1(f.pct), 1)} % por año` })), base: 0, baseLabel: "0 %", title: "Cambio por año, como % del promedio diario de cada serie", pos: "Sube", neg: "Baja", note: "Así se pueden comparar series de tamaños muy distintos: es el cambio por año dividido entre el promedio diario." });
+  const rows = [["Tiempo", `«${x}» cuenta días · cambio por año = cambio por día × ${por}`]].concat(filas.map((f) => [`«${f.y}»`, `promedio ${fmtNum(r2(f.prom))} por día · cambia ${fmtNum(r2(f.anio))} por año · ${f.pct > 0 ? "+" : ""}${fmtNum(r1(f.pct), 1)} % de su promedio`]));
+  return new StatResult("Tendencia por año", { tabla, filas: tabla }, rows, "Cada serie tiene su propia recta. «cambio_por_anio» está en las unidades de cada serie (víctimas por día); «pct_del_promedio_por_anio» las pone en la misma escala: qué parte de su promedio diario pierde (o gana) cada serie en un año.", [{ type: "figure", fig }, { type: "table", df: tabla, caption: "Tendencia de cada serie" }]);
+}
 function regresion_logistica(df, kw = {}) {
   const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const prueba = kw.prueba ?? 0.3; const umbral = kw.umbral ?? kw.threshold ?? 0.5;
   if (!(typeof umbral === "number" && umbral > 0 && umbral < 1)) throw new LabError("El umbral debe ser un número entre 0 y 1, por ejemplo umbral=0.3.", "Con 0.5 el modelo dice «sí» cuando la probabilidad llega a 50 %; con 0.2, cuando llega a 20 %.");
@@ -1573,7 +1590,9 @@ function renderCoefs(spec, W) {
     const x0 = X(Math.min(v, base)), x1 = X(Math.max(v, base));
     const r = el("rect", { x: x0, y: y0 + rowH * 0.18, width: Math.max(2, x1 - x0), height: rowH * 0.64, rx: 3, fill: pos ? "var(--accent)" : "var(--danger)", opacity: d.sig === false ? 0.35 : 0.9 });
     r.append(txt("title", {}, `${d.label}: ${d.texto}`)); svg.append(r);
-    svg.append(txt("text", { x: pos ? x1 + 6 : x0 - 6, y: y0 + rowH / 2 + 4, class: "ct-tick", "text-anchor": pos ? "start" : "end" }, d.texto));
+    const tw = String(d.texto).length * 6.6; const dentro = pos ? x1 + 6 + tw > W - 4 : x0 - 6 - tw < m.l; const ancho = x1 - x0 > tw + 12;
+    if (dentro && ancho) svg.append(txt("text", { x: pos ? x1 - 6 : x0 + 6, y: y0 + rowH / 2 + 4, "text-anchor": pos ? "end" : "start", fill: "#fff", style: "font: 600 11.5px var(--font)" }, d.texto));
+    else svg.append(txt("text", { x: pos ? x1 + 6 : x0 - 6, y: y0 + rowH / 2 + 4, class: "ct-tick", "text-anchor": pos ? "start" : "end" }, d.texto));
   });
   const ly = H - 14;
   svg.append(el("rect", { x: m.l, y: ly - 9, width: 11, height: 11, rx: 2, fill: "var(--accent)" })); svg.append(txt("text", { x: m.l + 16, y: ly, class: "ct-tick" }, spec.pos));
@@ -1731,6 +1750,7 @@ const CHECKS = {
   bogotaPadre: () => { const v = state.data.vif; const ag = new Set(["Padre", "Madre", "Padrastro", "Hermano", "Cuñado", "Hijo"]); const d = v.col("departamento").values, a = v.col("agresor").values; let tot = 0, pad = 0; for (let i = 0; i < d.length; i++) { if (d[i] === "Bogotá, D.C." && ag.has(a[i])) { tot++; if (a[i] === "Padre") pad++; } } return 100 * pad / tot; },
   vichada: () => state.data.vif.col("departamento").values.filter((x) => x === "Vichada").length,
   // Sesión 4
+  betaMujer: () => coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t"] }), "t"),
   mujerAnual: () => Math.abs(coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t"] }), "t")) * 365,
   mujerRelativo: () => 100 * CHECKS.mujerAnual() / state.data.diarios.col("mujeres").mean(),
   festivoMujer: () => [[], ["fin_de_semana"], ["quincena"], ["fin_de_semana", "quincena"]].map((extra) => coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t", "festivo_fijo", ...extra] }), "festivo_fijo")),
@@ -2022,22 +2042,22 @@ const MISIONES = [
     hipotesis: "Los homicidios de mujeres bajan al mismo ritmo que el total.",
     prediccion: { q: "Antes de calcular: ¿qué crees que pasa con los homicidios de mujeres?", op: ["Bajan unos 9,5 por día cada año, igual que el total", "Bajan, y en la misma proporción que el total", "No cambian", "Suben"] },
     pasos: [
-      { q: "¿Cuánto cambian por año los homicidios de mujeres?",
-        pista: "regresion_lineal(tabla, y=lo que quieres explicar, x=[lo que usas para explicarlo]). Para ver una tendencia, x es el tiempo. Ojo con las unidades: la columna t cuenta días, así que su coeficiente es el cambio POR DÍA. Para pasarlo a años, multiplícalo por 365; puedes hacer la cuenta en una celda, por ejemplo -0.004 * 365.",
+      { q: "¿Cómo cambian con el tiempo los homicidios de mujeres?",
+        pista: "regresion_lineal(tabla, y=lo que quieres explicar, x=[lo que usas para explicarlo]). Para ver una tendencia, x es el tiempo: la columna t cuenta los días (0, 1, 2…). El coeficiente (β) de t dice cuánto cambia y por cada día que pasa: si es negativo, baja; si es positivo, sube.",
         esq: "regresion_lineal(diarios, y=\"___\", x=[\"___\"])",
         huecos: [
           { q: "¿Qué quieres explicar (y)?", op: ["homicidios", "arma_fuego", "mujeres"] },
           { q: "¿Con qué lo explicas (x)? Para una tendencia necesitas el tiempo.", op: ["fin_de_semana", "t", "festivo_fijo"] } ],
-        cer: { q: "¿Cuántos homicidios de mujeres menos hay por día con cada año que pasa?", tol: 0.06, abs: true, calc: "mujerAnual", ayuda: "Busca el coeficiente de t en la tabla de coeficientes (es el cambio por día) y multiplícalo por 365. ¿Elegiste y = mujeres y x = t?", despues: "Es mucho menos que 9,5… pero también hay muchas menos víctimas mujeres. ¿Es justo compararlos así?" },
+        cer: { q: "¿Cuánto vale el coeficiente (β) de t? Escríbelo con su signo.", tol: 0.0003, calc: "betaMujer", ayuda: "Busca la fila «t» en la tabla de coeficientes, columna «coeficiente». Es un número muy pequeño y negativo. ¿Elegiste y = mujeres y x = t?", despues: "Es el cambio por DÍA: unas 0,0023 víctimas menos cada día que pasa. En el siguiente paso el laboratorio lo pasa a años por ti." },
         dec: { q: "El R² de este modelo es muy bajo (cerca de 0,06). ¿Qué quiere decir?", op: [
           { t: "Que no hay tendencia", ok: false, fb: "Mira el valor p del coeficiente de t: la tendencia existe y no es azar. El R² mide otra cosa." },
           { t: "Que la tendencia existe, pero el día a día varía tanto que el tiempo explica solo un 6 % de esa variación", ok: true, fb: "Eso es. Hay una tendencia clara, pero un día cualquiera puede tener 0 o 12 víctimas: la recta no sirve para adivinar un día concreto." },
           { t: "Que el modelo está mal hecho", ok: false, fb: "El modelo está bien; el tiempo solo explica una parte pequeña. Un R² bajo es información, no un error." } ] } },
-      { q: "¿Es justo comparar 0,8 con 9,5?",
-        pista: "Bajar 1 significa poco si hay 1.000 casos y mucho si hay 2. Compara cada caída con el promedio diario de su propia serie: (caída por año ÷ promedio diario) × 100 es el porcentaje que se pierde cada año.",
-        esq: "diarios[[\"___\", \"___\"]].mean()",
-        huecos: [{ q: "Primera serie: ¿qué promedio diario necesitas?", op: ["arma_fuego", "homicidios", "mujeres"] }, { q: "Segunda serie: ¿con qué la comparas?", op: ["mujeres", "fin_de_semana", "homicidios"] }],
-        cer: { q: "¿Qué porcentaje de su promedio diario pierden los homicidios de mujeres cada año?", unidad: "%", tol: 1.2, calc: "mujerRelativo", ayuda: "Divide tu número del paso anterior entre el promedio diario de mujeres y multiplica por 100.", despues: "El total pierde 9,5 de 54,7: cerca del 17 % al año." },
+      { q: "¿Bajan al mismo ritmo que el total?",
+        pista: "Bajar 1 víctima por año es mucho si hay 2 por día y poco si hay 100. tendencia_anual hace las cuentas por ti: pasa el cambio de días a años (× 365) y lo divide entre el promedio diario de cada serie. Así las dos quedan en la misma escala: el porcentaje que pierden cada año.",
+        esq: "tendencia_anual(diarios, y=[\"___\", \"___\"])",
+        huecos: [{ q: "Primera serie: ¿cuál quieres comparar?", op: ["arma_fuego", "homicidios", "mujeres"] }, { q: "Segunda serie: ¿con cuál la comparas?", op: ["mujeres", "fin_de_semana", "homicidios"] }],
+        cer: { q: "Según la tabla, ¿qué porcentaje de su promedio diario pierden cada año los homicidios de mujeres?", unidad: "%", tol: 0.6, abs: true, calc: "mujerRelativo", ayuda: "Busca la fila «mujeres» y la última columna (pct_del_promedio_por_anio). Puedes escribirlo con o sin el signo menos.", despues: "El total pierde cerca de 17 % al año: casi lo mismo." },
         dec: { q: "Entonces, ¿bajan al mismo ritmo?", op: [
           { t: "No: 0,8 es muchísimo menos que 9,5", ok: false, fb: "Compara en proporción: las mujeres son unas 4 de cada 55 víctimas diarias. Perder 0,8 de 4,4 no es poco." },
           { t: "En proporción sí: los dos pierden cerca de una sexta parte de su promedio cada año", ok: true, fb: "Exacto: en números absolutos la caída es mucho menor, pero en proporción es parecida (cerca de 19 % frente a 17 %). Esa diferencia entre absoluto y relativo va en tu veredicto." },
@@ -2229,7 +2249,7 @@ const REFERENCIA = [
   ["Agrupar y cruzar", [["df.groupby(\"g\")[\"v\"].mean()", "promedio por grupo"], ["df.groupby(\"g\").size()", "conteo por grupo"], ["df.groupby(\"g\")[\"v\"].agg([\"mean\", \"count\"])", "varias funciones"], ["pd.crosstab(df[\"a\"], df[\"b\"])", "tabla cruzada"], ["pd.crosstab(df[\"a\"], df[\"b\"], normalize=\"index\")", "% por fila"], ["df.sort_values(\"col\", ascending=False)", "ordenar"], ["pd.cut(df[\"edad_aprox\"], bins=[0, 17, 29, 59, 120], labels=[\"menor\", \"joven\", \"adulto\", \"mayor\"])", "agrupar números en rangos"]]],
   ["Graficar", [["grafico_barras(serie, horizontal=True, titulo=\"...\")", "barras"], ["grafico_lineas(serie)", "líneas"], ["histograma(df[\"edad_aprox\"], bins=20)", "histograma"], ["mapa_calor(tabla_cruzada)", "mapa de calor"], ["mapa_calor(tabla_cruzada, normalize=\"index\")", "mapa de calor en % por fila (o \"columns\", \"all\")"], ["dispersion(df, x=\"a\", y=\"b\", color=\"g\", tendencia=True)", "dispersión"], ["cajas(df, valor=\"v\", grupo=\"g\")", "diagrama de cajas"], ["serie.plot(kind=\"bar\")", "estilo pandas: bar, barh, line, pie, hist"]]],
   ["Pruebas", [["prueba_t(grupo1, grupo2)", "comparar dos medias"], ["anova(df, valor=\"v\", grupo=\"g\")", "comparar varias medias"], ["chi_cuadrado(tabla_cruzada)", "asociación entre categorías"], ["correlacion(df[\"a\"], df[\"b\"])", "r de Pearson"], ["intervalo_confianza(serie)", "IC 95 %"], ["tasa(conteo, poblacion, por=100000)", "tasas"]]],
-  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\"], umbral=0.2)", "umbral: con qué probabilidad dice «sí»"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
+  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["tendencia_anual(diarios, y=[\"homicidios\", \"mujeres\"])", "tendencia por año y en % de su promedio"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\"], umbral=0.2)", "umbral: con qué probabilidad dice «sí»"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
 ];
 
 const store = { get(k, d) { try { const v = localStorage.getItem("lab:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem("lab:" + k, JSON.stringify(v)); } catch {} } };
@@ -2267,7 +2287,7 @@ function makeGlobals() {
   fn("anova", ([a, b], kw) => anova(a, b, kw)); fn("chi_cuadrado", ([t]) => chi_cuadrado(t)); fn("chi2", ([t]) => chi_cuadrado(t));
   fn("correlacion", ([a, b]) => correlacion(a, b)); fn("intervalo_confianza", ([s], kw) => intervalo_confianza(s, kw)); fn("tasa", ([a, b], kw) => tasa(a, b, kw));
   fn("kmeans", ([df, k], kw) => kmeans(df, kw, [k])); fn("codo", ([df], kw) => codo(df, kw)); fn("pca", ([df], kw) => pca(df, kw));
-  fn("regresion_lineal", ([df], kw) => regresion_lineal(df, kw)); fn("regresion_logistica", ([df], kw) => regresion_logistica(df, kw));
+  fn("regresion_lineal", ([df], kw) => regresion_lineal(df, kw)); fn("tendencia_anual", ([df, y], kw) => tendencia_anual(df, kw, [y])); fn("regresion_logistica", ([df], kw) => regresion_logistica(df, kw));
   fn("arbol_decision", ([df], kw) => arbol_decision(df, kw)); fn("bosque_aleatorio", ([df], kw) => bosque_aleatorio(df, kw)); fn("matriz_confusion", ([a, b]) => matriz_confusion(a, b));
   // gráficas
   fn("grafico_barras", ([s], kw) => grafico_barras(s, kw)); fn("grafico_lineas", ([s], kw) => grafico_lineas(s, kw)); fn("histograma", ([s], kw) => histograma(s, kw));
@@ -2769,6 +2789,7 @@ PROHIBIDO (aquí no existe): importar librerías (sklearn, matplotlib, seaborn, 
   pca(tabla[[cols]]) → .PC1 .PC2 .cargas .varianza_explicada .componentes (para graficar: tabla["PC1"] = c.PC1; tabla["PC2"] = c.PC2; dispersion(tabla, x="PC1", y="PC2", color="grupo"))
   chi_cuadrado(tabla) → .chi2 .p .v_cramer .residuos; correlacion(a, b) → .r .p
   regresion_lineal(df, y=, x=[...]) → .coeficientes .r2 .mae .predicciones
+  tendencia_anual(diarios, y=["homicidios", "mujeres"]) → tabla con el cambio por día, por año y como % del promedio de cada serie
   regresion_logistica(df, y=binaria, x=[...], umbral=0.5) → .coeficientes (con odds_ratio) .exactitud .sensibilidad .especificidad .precision .matriz_confusion .probabilidades
   arbol_decision(df, y=, x=[...], profundidad=3) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .arbol (si y es numérica: .r2 .mae)
   bosque_aleatorio(df, y=, x=[...], arboles=40) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .predicciones (probabilidad de «sí») (si y es numérica: .r2 .mae). No tiene .coeficientes. grafico_barras(bosque, horizontal=True) grafica la importancia.
