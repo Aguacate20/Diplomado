@@ -1334,8 +1334,8 @@ function regresion_lineal(df, kw = {}) {
   const strongest = names.map((nm, j) => [nm, beta[j + 1], pvals[j + 1]]).sort((a, b) => a[2] - b[2])[0];
   return new StatResult(`Regresión lineal: ${y} ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, r2, r2_ajustado: r2adj, mae, rmse, n, predicciones: predS, residuos: resid },
     [["n", n.toLocaleString("es-CO")], ...refRows(encoders), ["R² (varianza explicada)", fmtNum(r2, 3)], ["R² ajustado", fmtNum(r2adj, 3)], ["MAE (error absoluto medio)", fmtNum(mae)], ["RMSE (raíz del error cuadrático medio)", fmtNum(rmse)]],
-    `El modelo explica el ${fmtNum(r2 * 100, 1)} % de la variación de «${y}». En promedio se equivoca por ${fmtNum(mae)} unidades. Cada coeficiente dice cuánto cambia «${y}» cuando esa variable sube una unidad, manteniendo las demás fijas${strongest ? `; la más clara aquí es «${strongest[0]}» (${strongest[1] > 0 ? "+" : ""}${fmtNum(strongest[1], 3)}, p ${pFmt(strongest[2])})` : ""}.`,
-    [{ type: "table", df: coefDF, caption: "Coeficientes" }]);
+    `El modelo explica el ${fmtNum(r2 * 100, 1)} % de la variación de «${y}». En promedio se equivoca por ${fmtNum(mae)} unidades. Cada coeficiente dice cuánto cambia «${y}» cuando esa variable sube una unidad, manteniendo las demás fijas${strongest ? `; la más clara aquí es «${strongest[0]}» (${strongest[1] > 0 ? "+" : ""}${fmtNum(redondeoSig(strongest[1]))}, p ${pFmt(strongest[2])})` : ""}.`,
+    [{ type: "figure", fig: xcols.length === 1 && encoders[0] && encoders[0].type === "num" ? scatterFigure(df, xcols[0], y, { tendencia: true, titulo: `Los datos y la recta ajustada (pendiente ${fmtNum(redondeoSig(beta[1]))})` }) : figCoefs(names, beta, pvals, y) }, { type: "table", df: coefDF, caption: "Coeficientes" }]);
 }
 
 function regresion_logistica(df, kw = {}) {
@@ -1368,7 +1368,7 @@ function regresion_logistica(df, kw = {}) {
   return new StatResult(`Regresión logística: P(${y} = ${t.positive}) ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, exactitud: mTest.acc, exactitud_entrenamiento: mTrain.acc, sensibilidad: mTest.sens, especificidad: mTest.spec, precision: mTest.prec, matriz_confusion: mTest.cm, probabilidades: probS, umbral, n: n },
     [["Clase positiva", `${y} = ${t.positive}`], ["Umbral de decisión", `${fmtNum(umbral, 2)} (dice «sí» si la probabilidad es ${fmtNum(umbral * 100, 0)} % o más)`], ...refRows(encoders), ["n (entrenamiento / prueba)", `${train.length.toLocaleString("es-CO")} / ${test.length.toLocaleString("es-CO")}`], ["Exactitud en prueba", `${fmtNum(mTest.acc * 100, 1)} % (acertar siempre la clase mayoritaria daría ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(mTrain.acc * 100, 1) + " %"], ["Sensibilidad (detecta positivos)", fmtNum(mTest.sens * 100, 1) + " %"], ["Especificidad (detecta negativos)", fmtNum(mTest.spec * 100, 1) + " %"], ["Precisión (de los que marca, acierta)", fmtNum(mTest.prec * 100, 1) + " %"]],
     `Un odds ratio > 1 aumenta la probabilidad de «${t.positive}»; < 1 la reduce. Compara la exactitud con la del «modelo tonto» que siempre dice la clase más frecuente (${fmtNum(base * 100, 1)} %): si no la supera claramente, el modelo no aprendió mucho. Mira la matriz de confusión: ¿qué tipo de error es más costoso en tu contexto?`,
-    [{ type: "table", df: coefDF, caption: "Coeficientes y odds ratios" }, { type: "table", df: mTest.cm, caption: "Matriz de confusión (datos de prueba): filas = realidad, columnas = predicción" }]);
+    [{ type: "figure", fig: figConfusion(mTest.cm, `${y} = ${t.positive}`) }, { type: "figure", fig: figOdds(names, coefRaw, pvals, `${y} = ${t.positive}`) }, { type: "table", df: coefDF, caption: "Coeficientes y odds ratios" }]);
 }
 function metricsFrom(tp, tn, fp, fn) { const n = tp + tn + fp + fn; const cm = new DataFrame({ "pred: positivo": [tp, fp], "pred: negativo": [fn, tn] }, { index: ["real: positivo", "real: negativo"], indexName: "" }); return { acc: (tp + tn) / n, sens: tp / (tp + fn || 1), spec: tn / (tn + fp || 1), prec: tp / (tp + fp || 1), cm, tp, tn, fp, fn }; }
 
@@ -1424,7 +1424,7 @@ function arbol_decision(df, kw = {}) {
   let rows, interp, fields;
   if (isNumY) { const ev = (idx) => { const errs = idx.map((i) => Math.abs(treePredict(tree, X[i]).value - t.yv[i])); const m = mean(idx.map((i) => t.yv[i])); const sse = idx.reduce((s, i) => s + (treePredict(tree, X[i]).value - t.yv[i]) ** 2, 0), sst = idx.reduce((s, i) => s + (t.yv[i] - m) ** 2, 0); return { mae: mean(errs), r2: 1 - sse / sst }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value); rows = [["Profundidad", maxDepth], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = `El árbol parte los datos con preguntas sí/no. Si el R² de entrenamiento es mucho mayor que el de prueba, el árbol memorizó (sobreajuste): baja la profundidad.`; }
   else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = treePredict(tree, X[i]).value; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => { const v = treePredict(tree, X[r]).value; predS.values[i] = t.positive === "True" ? !!v : v ? t.positive : (t.negative || "False"); }); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Profundidad", maxDepth], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; interp = `Lee el árbol de arriba abajo como un interrogatorio: cada pregunta divide los casos. Compara la exactitud con la del modelo que siempre dice la clase mayoritaria (${fmtNum(base * 100, 1)} %). Si entrenamiento ≫ prueba, el árbol memorizó: baja la profundidad.`; fields.matriz = b.cm; }
-  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz_confusion ? [{ type: "table", df: fields.matriz_confusion, caption: "Matriz de confusión (prueba)" }] : []));
+  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz_confusion ? [{ type: "figure", fig: figConfusion(fields.matriz_confusion, `${y} = ${t.positive}`) }] : []));
 }
 function bosque_aleatorio(df, kw = {}) {
   const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const nTrees = kw.arboles ?? kw.n_estimators ?? 40; const maxDepth = kw.profundidad ?? 6; const prueba = kw.prueba ?? 0.3; const minLeaf = kw.min_hojas ?? 10;
@@ -1441,7 +1441,7 @@ function bosque_aleatorio(df, kw = {}) {
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" });
   let rows, fields, interp, extra = [{ type: "table", df: impDF, caption: "Importancia de variables (promedio del bosque)" }];
   if (isNumY) { const ev = (idx) => { const m = mean(idx.map((i) => t.yv[i])); let sse = 0, sst = 0, ae = 0; for (const i of idx) { const p = predictRow(X[i]); sse += (p - t.yv[i]) ** 2; sst += (t.yv[i] - m) ** 2; ae += Math.abs(p - t.yv[i]); } return { r2: 1 - sse / sst, mae: ae / idx.length }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); rows = [["Árboles", nTrees], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = "Un bosque promedia muchos árboles entrenados con muestras distintas: suele predecir mejor que un solo árbol, a cambio de ser menos legible. La importancia dice qué variables usó más."; }
-  else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predictRow(X[i]) >= 0.5 ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Árboles / profundidad", `${nTrees} / ${maxDepth}`], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; extra.push({ type: "table", df: b.cm, caption: "Matriz de confusión (prueba)" }); interp = `El bosque vota con ${nTrees} árboles distintos. Compara con la exactitud del modelo «siempre la clase mayoritaria» (${fmtNum(base * 100, 1)} %). Predicciones = probabilidad de «${t.positive}» (proporción de árboles que votan sí).`; }
+  else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predictRow(X[i]) >= 0.5 ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Árboles / profundidad", `${nTrees} / ${maxDepth}`], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; extra.push({ type: "figure", fig: figConfusion(b.cm, `${y} = ${t.positive}`) }); interp = `El bosque vota con ${nTrees} árboles distintos. Compara con la exactitud del modelo «siempre la clase mayoritaria» (${fmtNum(base * 100, 1)} %). Predicciones = probabilidad de «${t.positive}» (proporción de árboles que votan sí).`; }
   return new StatResult(`Bosque aleatorio: ${y} ~ ${xcols.join(" + ")}`, { ...fields, importancia: impDF, predicciones: predS }, rows, interp, extra);
 }
 function matriz_confusion(real, pred) {
@@ -1546,11 +1546,68 @@ function renderFigure(fig, container) {
     case "heatmap": svg = renderHeatmap(spec, W); break;
     case "pie": svg = renderPie(spec, W); break;
     case "box": svg = renderBox(spec, W); break;
+    case "coefs": svg = renderCoefs(spec, W); break;
+    case "confusion": svg = renderConfusion(spec, W); break;
     default: wrap.textContent = "Tipo de gráfica no soportado."; container.append(wrap); return;
   }
   wrap.append(svg);
   if (spec.note) { const n = document.createElement("div"); n.className = "fig-note"; n.textContent = spec.note; wrap.append(n); }
   container.append(wrap);
+}
+function renderCoefs(spec, W) {
+  const n = spec.items.length; const rowH = 30; const labW = Math.min(250, Math.max(40, ...spec.items.map((d) => String(d.label).length)) * 6.8 + 14);
+  const m = { l: labW + 12, r: 24, t: spec.title ? 46 : 18, b: 44 }; const H = m.t + rowH * n + m.b; const pw = W - m.l - m.r;
+  const svg = frame(W, H, spec, m);
+  const LIM = spec.log ? Math.log(100) : Infinity;
+  const f = (v) => { if (!isNum(v)) return NaN; const z = spec.log ? (v > 0 ? Math.log(v) : -LIM) : v; return Math.max(-LIM, Math.min(LIM, z)); };
+  const base = f(spec.base ?? 0); const vals = spec.items.map((d) => f(d.value)).filter(isNum);
+  let lo = Math.min(base, ...vals), hi = Math.max(base, ...vals); if (lo === hi) { lo -= 1; hi += 1; }
+  const span = hi - lo; lo -= span * 0.18; hi += span * 0.18;
+  const X = (v) => m.l + (v - lo) / (hi - lo) * pw;
+  svg.append(el("line", { x1: X(base), x2: X(base), y1: m.t - 6, y2: m.t + rowH * n + 2, class: "ct-axis" }));
+  svg.append(txt("text", { x: X(base), y: m.t - 9, class: "ct-tick", "text-anchor": "middle" }, spec.baseLabel ?? fmtNum(spec.base ?? 0)));
+  spec.items.forEach((d, i) => {
+    const y0 = m.t + rowH * i; const v = f(d.value); const pos = v >= base;
+    svg.append(txt("text", { x: m.l - 8, y: y0 + rowH / 2 + 4, class: "ct-tick", "text-anchor": "end" }, shortLabel(String(d.label), 36)));
+    if (!isNum(v)) return;
+    const x0 = X(Math.min(v, base)), x1 = X(Math.max(v, base));
+    const r = el("rect", { x: x0, y: y0 + rowH * 0.18, width: Math.max(2, x1 - x0), height: rowH * 0.64, rx: 3, fill: pos ? "var(--accent)" : "var(--danger)", opacity: d.sig === false ? 0.35 : 0.9 });
+    r.append(txt("title", {}, `${d.label}: ${d.texto}`)); svg.append(r);
+    svg.append(txt("text", { x: pos ? x1 + 6 : x0 - 6, y: y0 + rowH / 2 + 4, class: "ct-tick", "text-anchor": pos ? "start" : "end" }, d.texto));
+  });
+  const ly = H - 14;
+  svg.append(el("rect", { x: m.l, y: ly - 9, width: 11, height: 11, rx: 2, fill: "var(--accent)" })); svg.append(txt("text", { x: m.l + 16, y: ly, class: "ct-tick" }, spec.pos));
+  svg.append(el("rect", { x: m.l + 250, y: ly - 9, width: 11, height: 11, rx: 2, fill: "var(--danger)" })); svg.append(txt("text", { x: m.l + 266, y: ly, class: "ct-tick" }, spec.neg));
+  return svg;
+}
+function renderConfusion(spec, W) {
+  const H = 306; const svg = frame(W, H, spec, { l: 20, t: 0 });
+  const cw = 230, ch = 92, x0 = 210, y0 = (spec.title ? 46 : 16) + 40;
+  svg.append(txt("text", { x: x0 + cw, y: y0 - 22, class: "ct-label", "text-anchor": "middle" }, "El modelo dijo…"));
+  ["SÍ", "NO"].forEach((t, j) => svg.append(txt("text", { x: x0 + cw * (j + 0.5), y: y0 - 2, class: "ct-tick", "text-anchor": "middle" }, t)));
+  svg.append(txt("text", { x: x0 - 108, y: y0 + ch - 4, class: "ct-label", "text-anchor": "middle" }, "En realidad…"));
+  ["SÍ", "NO"].forEach((t, i) => svg.append(txt("text", { x: x0 - 14, y: y0 + ch * (i + 0.5) + 4, class: "ct-tick", "text-anchor": "end" }, t)));
+  const celdas = [[spec.tp, "acertó: detectó el «sí»", "var(--ok)"], [spec.fn, "se le escapó (falso negativo)", "var(--danger)"], [spec.fp, "falsa alarma (falso positivo)", "var(--warn)"], [spec.tn, "acertó: descartó bien", "var(--ok)"]];
+  celdas.forEach(([v, et, c], k) => {
+    const i = Math.floor(k / 2), j = k % 2; const x = x0 + cw * j, y = y0 + ch * i;
+    svg.append(el("rect", { x: x + 2, y: y + 2, width: cw - 4, height: ch - 4, rx: 6, fill: c, opacity: 0.88 }));
+    svg.append(txt("text", { x: x + cw / 2, y: y + ch / 2 + 2, "text-anchor": "middle", fill: "#fff", style: "font: 700 24px var(--font)" }, (v ?? 0).toLocaleString("es-CO")));
+    svg.append(txt("text", { x: x + cw / 2, y: y + ch / 2 + 24, "text-anchor": "middle", fill: "#fff", style: "font: 600 12px var(--font)" }, et));
+  });
+  if (spec.pie) svg.append(txt("text", { x: x0 + cw, y: H - 10, class: "ct-tick", "text-anchor": "middle" }, spec.pie));
+  return svg;
+}
+function figConfusion(cm, positivo) {
+  const tp = cm.data["pred: positivo"][0], fn = cm.data["pred: negativo"][0], fp = cm.data["pred: positivo"][1], tn = cm.data["pred: negativo"][1];
+  return makeFigure({ type: "confusion", tp, fn, fp, tn, title: "Matriz de confusión (casos de prueba)", pie: `«Sí» = ${positivo}. Sensibilidad = ${fmtNum(tp / (tp + fn || 1) * 100, 1)} % · Especificidad = ${fmtNum(tn / (tn + fp || 1) * 100, 1)} %` });
+}
+function figCoefs(names, coefs, pvals, y) {
+  const items = names.map((nm, j) => ({ label: nm, value: coefs[j + 1], sig: pvals[j + 1] < 0.05, texto: (coefs[j + 1] > 0 ? "+" : "") + fmtNum(redondeoSig(coefs[j + 1])) }));
+  return makeFigure({ type: "coefs", items, base: 0, title: `¿Cuánto cambia «${y}» con cada variable?`, pos: `Positivo: «${y}» sube`, neg: `Negativo: «${y}» baja`, note: "Cada barra es un coeficiente (manteniendo las demás variables fijas). Las barras claras no se distinguen del azar (p ≥ 0,05)." });
+}
+function figOdds(names, coefRaw, pvals, positivo) {
+  const items = names.map((nm, j) => { const or = Math.exp(coefRaw[j + 1]); return { label: nm, value: or, sig: pvals[j + 1] < 0.05, texto: "×" + (or < 0.01 ? "<0,01" : or > 100 ? ">100" : fmtNum(Math.round(or * 100) / 100, 2)) }; });
+  return makeFigure({ type: "coefs", items, base: 1, log: true, baseLabel: "×1 (no cambia)", title: `Odds ratio: ¿qué hace más probable «${positivo}»?`, pos: "Mayor que 1: más probable", neg: "Menor que 1: menos probable", note: "Escala logarítmica: ×2 y ×0,5 quedan a la misma distancia del 1. Las barras claras no se distinguen del azar (p ≥ 0,05)." });
 }
 function frame(W, H, spec, m) {
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart", role: "img", "aria-label": spec.title || "gráfica" });
@@ -2268,7 +2325,7 @@ function renderStat(r, out) {
   const box = document.createElement("div"); box.className = "stat";
   const h = document.createElement("div"); h.className = "st-title"; h.textContent = r.title; box.append(h);
   const t = document.createElement("table"); t.className = "kv"; for (const [k, v] of r.rows) { const tr = document.createElement("tr"); const a = document.createElement("td"); a.textContent = k; const b = document.createElement("td"); b.textContent = typeof v === "number" ? fmtNum(v) : String(v); tr.append(a, b); t.append(tr); } box.append(t);
-  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; const hojas = (x.text.match(/predice/g) || []).length; if (x.text.split("\n").length > 40) { const det = document.createElement("details"); const sm = document.createElement("summary"); sm.className = "caption"; sm.style.cursor = "pointer"; sm.textContent = `${x.caption || "Reglas"} · ${hojas} hojas: demasiadas para leerlas en voz alta (clic para verlas)`; det.append(sm, p); d.append(det); } else d.append(c, p); } box.append(d); }
+  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "figure") renderFigure(x.fig, d); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; const hojas = (x.text.match(/predice/g) || []).length; if (x.text.split("\n").length > 40) { const det = document.createElement("details"); const sm = document.createElement("summary"); sm.className = "caption"; sm.style.cursor = "pointer"; sm.textContent = `${x.caption || "Reglas"} · ${hojas} hojas: demasiadas para leerlas en voz alta (clic para verlas)`; det.append(sm, p); d.append(det); } else d.append(c, p); } box.append(d); }
   if (r.interp) { const i = document.createElement("div"); i.className = "interp"; i.textContent = r.interp; box.append(i); }
   out.append(box);
 }
