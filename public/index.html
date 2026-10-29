@@ -1324,6 +1324,12 @@ function regresion_lineal(df, kw = {}) {
   const XtX = Array.from({ length: p }, () => Array(p).fill(0)), Xty = Array(p).fill(0);
   for (let i = 0; i < n; i++) for (let a = 0; a < p; a++) { Xty[a] += Xd[i][a] * yv[i]; for (let b = 0; b < p; b++) XtX[a][b] += Xd[i][a] * Xd[i][b]; }
   const beta = solveLinear(XtX, Xty); const pred = Xd.map((r) => r.reduce((s, v, j) => s + v * beta[j], 0));
+  __ult = { encoders, f: (r) => beta[0] + r.reduce((s, v, j) => s + v * beta[j + 1], 0), nombre: "prediccion" };
+  const pr = (() => { const { train, test } = trainTestSplit(n, kw.prueba ?? 0.3, kw.semilla ?? 42); const A = Array.from({ length: p }, () => Array(p).fill(0)), bb = Array(p).fill(0);
+    for (const i of train) for (let a = 0; a < p; a++) { bb[a] += Xd[i][a] * yv[i]; for (let c = 0; c < p; c++) A[a][c] += Xd[i][a] * Xd[i][c]; }
+    for (let a = 1; a < p; a++) A[a][a] += 1e-6 * train.length; const bt = solveLinear(A, bb); const f = (i) => Xd[i].reduce((s, v, j) => s + v * bt[j], 0);
+    const mt = mean(train.map((i) => yv[i])), m2 = mean(test.map((i) => yv[i])); let sse = 0, sst = 0, ae = 0, aeT = 0; for (const i of test) { const e = yv[i] - f(i); sse += e * e; sst += (yv[i] - m2) ** 2; ae += Math.abs(e); aeT += Math.abs(yv[i] - mt); }
+    return { r2: 1 - sse / sst, mae: ae / test.length, maeT: aeT / test.length, real: test.map((i) => yv[i]), pred: test.map(f) }; })();
   const ym = mean(yv); const sse = yv.reduce((s, v, i) => s + (v - pred[i]) ** 2, 0), sst = yv.reduce((s, v) => s + (v - ym) ** 2, 0);
   const r2 = 1 - sse / sst, r2adj = 1 - (1 - r2) * (n - 1) / (n - p); const mae = yv.reduce((s, v, i) => s + Math.abs(v - pred[i]), 0) / n, rmse = Math.sqrt(sse / n);
   const sigma2 = sse / (n - p); const inv = invert(XtX); const se = beta.map((_, j) => Math.sqrt(Math.max(sigma2 * inv[j][j], 0)));
@@ -1332,10 +1338,10 @@ function regresion_lineal(df, kw = {}) {
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" }); keep.forEach((i, r) => predS.values[i] = pred[r]);
   const resid = new Series(Array(df.length).fill(NaN), { index: df.index, name: "residuo" }); keep.forEach((i, r) => resid.values[i] = yv[r] - pred[r]);
   const strongest = names.map((nm, j) => [nm, beta[j + 1], pvals[j + 1]]).sort((a, b) => a[2] - b[2])[0];
-  return new StatResult(`Regresión lineal: ${y} ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, r2, r2_ajustado: r2adj, mae, rmse, n, predicciones: predS, residuos: resid },
-    [["n", n.toLocaleString("es-CO")], ...refRows(encoders), ["R² (varianza explicada)", fmtNum(r2, 3)], ["R² ajustado", fmtNum(r2adj, 3)], ["MAE (error absoluto medio)", fmtNum(mae)], ["RMSE (raíz del error cuadrático medio)", fmtNum(rmse)]],
+  return new StatResult(`Regresión lineal: ${y} ~ ${xcols.join(" + ")}`, { coeficientes: coefDF, r2, r2_ajustado: r2adj, mae, rmse, n, predicciones: predS, residuos: resid, r2_prueba: pr.r2, mae_prueba: pr.mae, mae_tonto: pr.maeT },
+    [["n", n.toLocaleString("es-CO")], ...refRows(encoders), ["R² (varianza explicada)", fmtNum(r2, 3)], ["R² ajustado", fmtNum(r2adj, 3)], ["MAE (error absoluto medio)", fmtNum(mae)], ["RMSE (raíz del error cuadrático medio)", fmtNum(rmse)], ["R² en casos nuevos (prueba, 30 %)", fmtNum(pr.r2, 3)], ["MAE en casos nuevos (prueba)", fmtNum(pr.mae)], ["MAE del modelo tonto (decir siempre el promedio)", fmtNum(pr.maeT)]],
     `El modelo explica el ${fmtNum(r2 * 100, 1)} % de la variación de «${y}». En promedio se equivoca por ${fmtNum(mae)} unidades. Cada coeficiente dice cuánto cambia «${y}» cuando esa variable sube una unidad, manteniendo las demás fijas${strongest ? `; la más clara aquí es «${strongest[0]}» (${strongest[1] > 0 ? "+" : ""}${fmtNum(redondeoSig(strongest[1]))}, p ${pFmt(strongest[2])})` : ""}.`,
-    [{ type: "figure", fig: xcols.length === 1 && encoders[0] && encoders[0].type === "num" ? scatterFigure(df, xcols[0], y, { tendencia: true, titulo: `Los datos y la recta ajustada (pendiente ${fmtNum(redondeoSig(beta[1]))})` }) : figCoefs(names, beta, pvals, y) }, { type: "table", df: coefDF, caption: "Coeficientes" }]);
+    [{ type: "figure", fig: xcols.length === 1 && encoders[0] && encoders[0].type === "num" ? scatterFigure(df, xcols[0], y, { tendencia: true, titulo: `Los datos y la recta ajustada (pendiente ${fmtNum(redondeoSig(beta[1]))})` }) : figCoefs(names, beta, pvals, y) }].concat(xcols.length > 1 ? [{ type: "figure", fig: figRealPredicho(pr.real, pr.pred) }] : [], [{ type: "table", df: coefDF, caption: "Coeficientes" }]));
 }
 
 function tendencia_anual(df, kw = {}, pos = []) {
@@ -1378,6 +1384,7 @@ function regresion_logistica(df, kw = {}) {
   const coefRaw = beta.map((b, j) => j === 0 ? b - beta.slice(1).reduce((s, bb, k) => s + bb * sc.mu[k] / sc.sd[k], 0) : b / sc.sd[j - 1]);
   const seRaw = seS.map((s, j) => j === 0 ? s : s / sc.sd[j - 1]); const zvals = beta.map((b, j) => b / seS[j]); const pvals = zvals.map((z) => 2 * (1 - normCDF(Math.abs(z))));
   const predict = (i) => 1 / (1 + Math.exp(-Zs(X[i]).reduce((s, v, j) => s + v * beta[j], 0)));
+  __ult = { encoders, f: (r) => 1 / (1 + Math.exp(-Zs(r).reduce((s, v, j) => s + v * beta[j], 0))), nombre: "probabilidad" };
   const evalSet = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predict(i) >= umbral ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); };
   const mTrain = evalSet(train), mTest = evalSet(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i])));
   const coefDF = new DataFrame({ variable: ["(intercepto)", ...names], coeficiente: coefRaw.map(redondeoSig), odds_ratio: coefRaw.map((v, j) => j === 0 ? NaN : Math.round(Math.exp(v) * 100) / 100), p: pvals.map((v) => Math.round(v * 10000) / 10000), signif: pvals.map(sig) });
@@ -1388,6 +1395,47 @@ function regresion_logistica(df, kw = {}) {
     [{ type: "figure", fig: figConfusion(mTest.cm, `${y} = ${t.positive}`) }, { type: "figure", fig: figOdds(names, coefRaw, pvals, `${y} = ${t.positive}`) }, { type: "table", df: coefDF, caption: "Coeficientes y odds ratios" }]);
 }
 function metricsFrom(tp, tn, fp, fn) { const n = tp + tn + fp + fn; const cm = new DataFrame({ "pred: positivo": [tp, fp], "pred: negativo": [fn, tn] }, { index: ["real: positivo", "real: negativo"], indexName: "" }); return { acc: (tp + tn) / n, sens: tp / (tp + fn || 1), spec: tn / (tn + fp || 1), prec: tp / (tp + fp || 1), cm, tp, tn, fp, fn }; }
+
+/* --- Aplicar modelos a casos nuevos --- */
+let __ult = null; // el último modelo ajustado deja aquí cómo predecir (lo recoge el envoltorio de cada función)
+function codificarCon(df, encoders) {
+  for (const e of encoders) if (!df.columns.includes(e.col)) throw new LabError(`La tabla nueva no tiene la columna «${e.col}», que el modelo usa para predecir.`, `El modelo necesita: ${encoders.map((x) => x.col).join(", ")}.`);
+  const rows = [];
+  for (let i = 0; i < df.length; i++) {
+    const r = []; let ok = true;
+    for (const e of encoders) {
+      const v = df.data[e.col][i]; if (isMissing(v)) { ok = false; break; }
+      if (e.type === "num") { if (!isNum(v)) { ok = false; break; } r.push(v); }
+      else if (e.type === "bool") r.push(v === true || v === 1 || v === "True" ? 1 : 0);
+      else { if (!e.levels.includes(v) && v !== e.ref) { ok = false; break; } for (const l of e.levels) r.push(v === l ? 1 : 0); }
+    }
+    rows.push(ok ? r : null);
+  }
+  return rows;
+}
+function predecir(m, df) {
+  if (!(m instanceof StatResult) || !m._predict) throw new LabError("predecir(modelo, tabla): el primer argumento debe ser un modelo guardado en una variable (árbol, bosque o regresión).", "Ejemplo: bosque = bosque_aleatorio(casos, y=\"es_rina\", x=[...]) y luego predecir(bosque, casos_nuevos)");
+  if (!(df instanceof DataFrame)) throw new LabError("predecir(modelo, tabla): el segundo argumento debe ser una tabla con las columnas que usó el modelo.", "Un caso inventado se arma así: pd.DataFrame({\"dia_num\": [7], \"anio\": [2005]})");
+  const X = codificarCon(df, m._predict.encoders);
+  const vals = X.map((r) => (r ? m._predict.f(r) : NaN));
+  const s = new Series(vals, { index: [...df.index], name: m._predict.nombre });
+  const faltan = vals.filter((v) => !isNum(v)).length;
+  if (faltan === vals.length) throw new LabError("Ningún caso de la tabla nueva se pudo predecir.", "Revisa que las columnas tengan valores conocidos y categorías que el modelo vio al entrenar (las 12 más frecuentes de cada columna).");
+  return s;
+}
+const __envolver = (f) => (df, kw) => { __ult = null; const r = f(df, kw); if (__ult) { r._predict = __ult; __ult = null; } return r; };
+function figRealPredicho(real, pred, titulo) {
+  const k = real.length > 1500 ? Math.ceil(real.length / 1500) : 1; const pts = [];
+  for (let i = 0; i < real.length; i += k) if (isNum(real[i]) && isNum(pred[i])) pts.push([real[i], pred[i], null]);
+  return makeFigure({ type: "scatter", series: [{ name: "", points: pts }], title: titulo || "Casos nuevos (prueba): lo que pasó contra lo que predijo", xlabel: "lo que pasó (real)", ylabel: "lo que predijo el modelo", diagonal: true, note: "Si el modelo acertara siempre, todos los puntos caerían sobre la diagonal punteada. Mientras más lejos de ella, más se equivoca." });
+}
+function figEscalones(df, xc, yc, f, titulo) {
+  const xs = df.col(xc).values, ys = df.col(yc).values; const pts = []; const k = df.length > 1500 ? Math.ceil(df.length / 1500) : 1;
+  for (let i = 0; i < df.length; i += k) if (isNum(xs[i]) && isNum(ys[i])) pts.push([xs[i], ys[i], null]);
+  const v = xs.filter(isNum); const lo = Math.min(...v), hi = Math.max(...v); const linea = [];
+  for (let j = 0; j <= 240; j++) { const x = lo + (hi - lo) * j / 240; linea.push([x, f([x])]); }
+  return makeFigure({ type: "scatter", series: [{ name: "", points: pts }], title: titulo, xlabel: xc, ylabel: yc, escalones: linea, tendencia: true, note: "Los escalones (naranja) son el árbol: cada uno es una hoja y predice el promedio de sus casos. La línea punteada es lo que haría una regresión lineal: solo puede subir o bajar; los escalones siguen la forma de los datos." });
+}
 
 /* --- Árboles de decisión (CART) --- */
 function buildTree(X, yv, idx, depth, maxDepth, minLeaf, featNames, featTypes, isNum, rnd, mtry) {
@@ -1416,7 +1464,7 @@ function treeToText(node, names, isNum, posLabel, depth = 0, tipos = []) {
   const nm = names[node.f]; const ty = tipos[node.f] || (node.cat ? "cat" : "num"); let q, si, no;
   if (ty === "cat") { q = `¿${nm.split("=")[0]} es «${nm.split("=").slice(1).join("=")}»?`; si = node.right; no = node.left; }
   else if (ty === "bool") { q = `¿${nm}?`; si = node.right; no = node.left; }
-  else { q = `¿${nm} ≤ ${fmtNum(node.thr)}?`; si = node.left; no = node.right; }
+  else { q = `¿${nm} ≤ ${fmtUmbral(node.thr)}?`; si = node.left; no = node.right; }
   return `${pad}${q}\n${pad}├─ Sí:\n${treeToText(si, names, isNum, posLabel, depth + 1, tipos)}${pad}└─ No:\n${treeToText(no, names, isNum, posLabel, depth + 1, tipos)}`;
 }
 function importanciaPorVariable(imp, names) {
@@ -1434,19 +1482,20 @@ function arbol_decision(df, kw = {}) {
   const isNumY = t.type === "num"; const featTypes = names.map((nm) => nm.includes("=") ? "cat" : "num");
   const { train, test } = trainTestSplit(X.length, prueba, kw.semilla ?? 42);
   const tree = buildTree(X, t.yv, train, 0, maxDepth, minLeaf, names, featTypes, isNumY, mulberry(7), 0);
+  __ult = { encoders, f: (r) => { const nd = treePredict(tree, r); return isNumY ? nd.value : nd.p; }, nombre: isNumY ? "prediccion" : "probabilidad" };
   const tipos = names.map((nm) => (nm.includes("=") ? "cat" : (encoders.find((e) => e.col === nm) || {}).type === "bool" ? "bool" : "num")); const txt = treeToText(tree, names, isNumY, t.positive === "True" ? y : t.positive, 0, tipos);
   const imp = {}; treeImportance(tree, imp); const tot = Object.values(imp).reduce((a, b) => a + b, 0) || 1;
   const impDF = importanciaPorVariable(imp, names);
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" });
   let rows, interp, fields;
-  if (isNumY) { const ev = (idx) => { const errs = idx.map((i) => Math.abs(treePredict(tree, X[i]).value - t.yv[i])); const m = mean(idx.map((i) => t.yv[i])); const sse = idx.reduce((s, i) => s + (treePredict(tree, X[i]).value - t.yv[i]) ** 2, 0), sst = idx.reduce((s, i) => s + (t.yv[i] - m) ** 2, 0); return { mae: mean(errs), r2: 1 - sse / sst }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value); rows = [["Profundidad", maxDepth], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = `El árbol parte los datos con preguntas sí/no. Si el R² de entrenamiento es mucho mayor que el de prueba, el árbol memorizó (sobreajuste): baja la profundidad.`; }
+  if (isNumY) { const ev = (idx) => { const errs = idx.map((i) => Math.abs(treePredict(tree, X[i]).value - t.yv[i])); const m = mean(idx.map((i) => t.yv[i])); const sse = idx.reduce((s, i) => s + (treePredict(tree, X[i]).value - t.yv[i]) ** 2, 0), sst = idx.reduce((s, i) => s + (t.yv[i] - m) ** 2, 0); return { mae: mean(errs), r2: 1 - sse / sst }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = treePredict(tree, X[r]).value); const mt = mean(train.map((i) => t.yv[i])); const maeT = mean(test.map((i) => Math.abs(t.yv[i] - mt))); rows = [["Profundidad", maxDepth], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba (error promedio en casos nuevos)", fmtNum(b.mae)], ["MAE del modelo tonto (decir siempre el promedio)", fmtNum(maeT)]]; fields = { r2: b.r2, mae: b.mae, r2_entrenamiento: a.r2, mae_tonto: maeT }; interp = `El árbol parte los datos con preguntas sí/no y en cada hoja predice el promedio de sus casos. Compara su error en casos nuevos (${fmtNum(b.mae)}) con el del modelo tonto (${fmtNum(maeT)}). Si el R² de entrenamiento es mucho mayor que el de prueba, el árbol memorizó (sobreajuste): baja la profundidad.`; fields._fig = xcols.length === 1 && encoders[0] && encoders[0].type === "num" ? figEscalones(df, xcols[0], y, (r) => treePredict(tree, r).value, `Los datos y los escalones del árbol (R² en prueba ${fmtNum(b.r2, 2)})`) : figRealPredicho(test.map((i) => t.yv[i]), test.map((i) => treePredict(tree, X[i]).value)); }
   else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = treePredict(tree, X[i]).value; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => { const v = treePredict(tree, X[r]).value; predS.values[i] = t.positive === "True" ? !!v : v ? t.positive : (t.negative || "False"); }); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Profundidad", maxDepth], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; interp = `Lee el árbol de arriba abajo como un interrogatorio: cada pregunta divide los casos. Compara la exactitud con la del modelo que siempre dice la clase mayoritaria (${fmtNum(base * 100, 1)} %). Si entrenamiento ≫ prueba, el árbol memorizó: baja la profundidad.`; fields.matriz = b.cm; }
-  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...fields, arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [{ type: "pre", text: txt, caption: "Reglas del árbol" }, { type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }].concat(fields.matriz_confusion ? [{ type: "figure", fig: figConfusion(fields.matriz_confusion, `${y} = ${t.positive}`) }] : []));
+  return new StatResult(`Árbol de decisión: ${y} ~ ${xcols.join(" + ")}`, { ...Object.fromEntries(Object.entries(fields).filter(([k]) => k !== "_fig")), arbol: txt, importancia: impDF, predicciones: predS }, rows, interp, [].concat((() => { const fa = figArbol(tree, names, tipos, isNumY, t.positive === "True" ? y : t.positive, y); return fa ? [{ type: "figure", fig: fa }, { type: "pre", text: txt, caption: "Reglas del árbol", colapsado: true }] : [{ type: "pre", text: txt, caption: "Reglas del árbol" }]; })(), fields._fig ? [{ type: "figure", fig: fields._fig }] : [], [{ type: "table", df: impDF, caption: "Importancia de variables (reducción de impureza)" }]).concat(fields.matriz_confusion ? [{ type: "figure", fig: figConfusion(fields.matriz_confusion, `${y} = ${t.positive}`) }] : []));
 }
 function bosque_aleatorio(df, kw = {}) {
   const y = kw.y, xcols = Array.isArray(kw.x) ? kw.x : kw.x ? [kw.x] : null; const nTrees = kw.arboles ?? kw.n_estimators ?? 40; const maxDepth = kw.profundidad ?? 6; const prueba = kw.prueba ?? 0.3; const minLeaf = kw.min_hojas ?? 10;
   if (!(df instanceof DataFrame) || !y || !xcols) throw new LabError("bosque_aleatorio(df, y=\"columna\", x=[\"col1\", \"col2\"], arboles=40)");
-  const { X, keep, names } = withY(df, y, designMatrix(df, xcols)); const t = targetVector(df, y, keep);
+  const { X, keep, names, encoders } = withY(df, y, designMatrix(df, xcols)); const t = targetVector(df, y, keep);
   if (t.type === "multi") throw new LabError(`«${y}» tiene más de dos categorías. Crea una variable sí/no primero.`);
   const isNumY = t.type === "num"; const featTypes = names.map((nm) => nm.includes("=") ? "cat" : "num");
   const { train, test } = trainTestSplit(X.length, prueba, kw.semilla ?? 42); const rnd = mulberry(kw.semilla ?? 42);
@@ -1455,9 +1504,10 @@ function bosque_aleatorio(df, kw = {}) {
   const tot = Object.values(imp).reduce((a, b) => a + b, 0) || 1;
   const impDF = importanciaPorVariable(imp, names);
   const predictRow = (x) => { if (isNumY) return mean(trees.map((tr) => treePredict(tr, x).value)); const votes = trees.reduce((s, tr) => s + treePredict(tr, x).value, 0); return votes / trees.length; };
+  __ult = { encoders, f: predictRow, nombre: isNumY ? "prediccion" : "probabilidad" };
   const predS = new Series(Array(df.length).fill(NaN), { index: df.index, name: "prediccion" });
   let rows, fields, interp, extra = [{ type: "table", df: impDF, caption: "Importancia de variables (promedio del bosque)" }];
-  if (isNumY) { const ev = (idx) => { const m = mean(idx.map((i) => t.yv[i])); let sse = 0, sst = 0, ae = 0; for (const i of idx) { const p = predictRow(X[i]); sse += (p - t.yv[i]) ** 2; sst += (t.yv[i] - m) ** 2; ae += Math.abs(p - t.yv[i]); } return { r2: 1 - sse / sst, mae: ae / idx.length }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); rows = [["Árboles", nTrees], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba", fmtNum(b.mae)]]; fields = { r2: b.r2, mae: b.mae }; interp = "Un bosque promedia muchos árboles entrenados con muestras distintas: suele predecir mejor que un solo árbol, a cambio de ser menos legible. La importancia dice qué variables usó más."; }
+  if (isNumY) { const ev = (idx) => { const m = mean(idx.map((i) => t.yv[i])); let sse = 0, sst = 0, ae = 0; for (const i of idx) { const p = predictRow(X[i]); sse += (p - t.yv[i]) ** 2; sst += (t.yv[i] - m) ** 2; ae += Math.abs(p - t.yv[i]); } return { r2: 1 - sse / sst, mae: ae / idx.length }; }; const a = ev(train), b = ev(test); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); const mt = mean(train.map((i) => t.yv[i])); const maeT = mean(test.map((i) => Math.abs(t.yv[i] - mt))); rows = [["Árboles", nTrees], ["R² en prueba / entrenamiento", `${fmtNum(b.r2, 3)} / ${fmtNum(a.r2, 3)}`], ["MAE en prueba (error promedio en casos nuevos)", fmtNum(b.mae)], ["MAE del modelo tonto (decir siempre el promedio)", fmtNum(maeT)]]; fields = { r2: b.r2, mae: b.mae, r2_entrenamiento: a.r2, mae_tonto: maeT }; extra.unshift({ type: "figure", fig: figRealPredicho(test.map((i) => t.yv[i]), test.map((i) => predictRow(X[i]))) }); interp = "Un bosque promedia muchos árboles entrenados con muestras distintas: suele predecir mejor que un solo árbol, a cambio de ser menos legible. La importancia dice qué variables usó más."; }
   else { const ev = (idx) => { let tp = 0, tn = 0, fp = 0, fn = 0; for (const i of idx) { const pr = predictRow(X[i]) >= 0.5 ? 1 : 0; if (pr && t.yv[i]) tp++; else if (pr && !t.yv[i]) fp++; else if (!pr && t.yv[i]) fn++; else tn++; } return metricsFrom(tp, tn, fp, fn); }; const a = ev(train), b = ev(test); const base = Math.max(mean(test.map((i) => t.yv[i])), 1 - mean(test.map((i) => t.yv[i]))); keep.forEach((i, r) => predS.values[i] = predictRow(X[r])); rows = [["Clase positiva", `${y} = ${t.positive}`], ["Árboles / profundidad", `${nTrees} / ${maxDepth}`], ["Exactitud en prueba", `${fmtNum(b.acc * 100, 1)} % (clase mayoritaria: ${fmtNum(base * 100, 1)} %)`], ["Exactitud en entrenamiento", fmtNum(a.acc * 100, 1) + " %"], ["Sensibilidad / Especificidad", `${fmtNum(b.sens * 100, 1)} % / ${fmtNum(b.spec * 100, 1)} %`]]; fields = { exactitud: b.acc, exactitud_entrenamiento: a.acc, matriz_confusion: b.cm, sensibilidad: b.sens, especificidad: b.spec }; extra.push({ type: "figure", fig: figConfusion(b.cm, `${y} = ${t.positive}`) }); interp = `El bosque vota con ${nTrees} árboles distintos. Compara con la exactitud del modelo «siempre la clase mayoritaria» (${fmtNum(base * 100, 1)} %). Predicciones = probabilidad de «${t.positive}» (proporción de árboles que votan sí).`; }
   return new StatResult(`Bosque aleatorio: ${y} ~ ${xcols.join(" + ")}`, { ...fields, importancia: impDF, predicciones: predS }, rows, interp, extra);
 }
@@ -1565,11 +1615,65 @@ function renderFigure(fig, container) {
     case "box": svg = renderBox(spec, W); break;
     case "coefs": svg = renderCoefs(spec, W); break;
     case "confusion": svg = renderConfusion(spec, W); break;
+    case "tree": svg = renderTree(spec, 880); break;
     default: wrap.textContent = "Tipo de gráfica no soportado."; container.append(wrap); return;
   }
   wrap.append(svg);
   if (spec.note) { const n = document.createElement("div"); n.className = "fig-note"; n.textContent = spec.note; wrap.append(n); }
   container.append(wrap);
+}
+function arbolASpec(node, names, tipos, isNum) {
+  if (!node.left) return isNum ? { hoja: true, valor: node.value, n: node.n } : { hoja: true, si: !!node.value, pct: node.p * 100, n: node.n };
+  const nm = names[node.f]; const ty = tipos[node.f] || (node.cat ? "cat" : "num"); let q, si, no;
+  if (ty === "cat") { q = `¿${nm.split("=")[0]} es «${nm.split("=").slice(1).join("=")}»?`; si = node.right; no = node.left; }
+  else if (ty === "bool") { q = `¿${nm}?`; si = node.right; no = node.left; }
+  else { q = `¿${nm} ≤ ${fmtUmbral(node.thr)}?`; si = node.left; no = node.right; }
+  return { q, n: node.n, si: arbolASpec(si, names, tipos, isNum), no: arbolASpec(no, names, tipos, isNum) };
+}
+function fmtUmbral(v) { return Math.abs(v) >= 1000 ? String(Math.round(v * 100) / 100).replace(".", ",") : fmtNum(v); }
+function contarHojas(s) { return s.hoja ? 1 : contarHojas(s.si) + contarHojas(s.no); }
+function hondura(s) { return s.hoja ? 0 : 1 + Math.max(hondura(s.si), hondura(s.no)); }
+function partirTexto(s, ancho, maxL = 2) {
+  const pal = String(s).split(" "); const L = []; let cur = "";
+  for (const p of pal) { if ((cur + " " + p).trim().length <= ancho) cur = (cur + " " + p).trim(); else { if (cur) L.push(cur); cur = p; } }
+  if (cur) L.push(cur);
+  if (L.length > maxL) { L.length = maxL; L[maxL - 1] = shortLabel(L[maxL - 1] + " …", ancho); }
+  return L.map((l) => shortLabel(l, ancho));
+}
+function renderTree(spec, W) {
+  const R = spec.raiz; const nH = contarHojas(R), D = hondura(R);
+  const top = spec.title ? 44 : 14, lvl = 112, boxI = 58, boxL = 64;
+  const H = top + D * lvl + boxL + 16; const svg = frame(W, H, spec, { l: 10 });
+  const slot = (W - 20) / nH; let k = 0; const nodos = [];
+  const pos = (s, d) => { if (s.hoja) { s._x = 10 + slot * (k + 0.5); k++; } else { pos(s.si, d + 1); pos(s.no, d + 1); s._x = (s.si._x + s.no._x) / 2; s._span = (contarHojas(s)) * slot; } s._y = top + d * lvl; nodos.push(s); };
+  pos(R, 0);
+  const vals = nodos.filter((s) => s.hoja && isNum(s.valor)).map((s) => s.valor); const vlo = Math.min(...vals), vhi = Math.max(...vals);
+  const aristas = (s) => { if (s.hoja) return; for (const [h, et] of [[s.si, "Sí"], [s.no, "No"]]) { const x1 = s._x, y1 = s._y + boxI, x2 = h._x, y2 = h._y; svg.append(el("path", { d: `M${x1} ${y1} C${x1} ${y1 + 30}, ${x2} ${y2 - 34}, ${x2} ${y2}`, fill: "none", stroke: "var(--line)", "stroke-width": 1.6 })); const mx = (x1 + x2) / 2, my = (y1 + y2) / 2; svg.append(el("rect", { x: mx - 14, y: my - 9, width: 28, height: 17, rx: 8, fill: "var(--surface)", stroke: "var(--line)" })); svg.append(txt("text", { x: mx, y: my + 4, class: "ct-tick", "text-anchor": "middle", style: "font-weight:600" }, et)); aristas(h); } };
+  aristas(R);
+  for (const s of nodos) {
+    if (!s.hoja) {
+      const w = Math.min(260, Math.max(112, s._span - 12)); const lines = partirTexto(s.q, Math.floor(w / 7.4), 2);
+      const g = el("g"); g.append(el("rect", { x: s._x - w / 2, y: s._y, width: w, height: boxI, rx: 8, fill: "var(--surface2)", stroke: "var(--accent)", "stroke-width": 1.4 }));
+      lines.forEach((l, i) => g.append(txt("text", { x: s._x, y: s._y + (lines.length === 1 ? 25 : 19) + i * 16, "text-anchor": "middle", style: "font: 600 13.5px var(--font); fill: var(--ink)" }, l)));
+      g.append(txt("text", { x: s._x, y: s._y + boxI - 7, "text-anchor": "middle", style: "font: 400 11.5px var(--font); fill: var(--muted)" }, `${s.n.toLocaleString("es-CO")} casos`));
+      g.append(txt("title", {}, `${s.q} · ${s.n.toLocaleString("es-CO")} casos`)); svg.append(g);
+    } else {
+      const w = Math.max(64, Math.min(150, slot - 8)); const g = el("g");
+      let fill, op, l1, l2;
+      if (isNum(s.valor)) { const t = vhi > vlo ? (s.valor - vlo) / (vhi - vlo) : 0.5; fill = "var(--warn)"; op = 0.15 + 0.7 * t; l1 = `≈ ${fmtNum(Math.round(s.valor * 10) / 10)}`; l2 = spec.yname ? shortLabel(spec.yname, Math.floor(w / 6.4)) : "promedio"; }
+      else { const pur = Math.abs(s.pct - 50) / 50; fill = s.si ? "var(--warn)" : "var(--accent)"; op = 0.18 + 0.6 * pur; l1 = s.si ? "SÍ" : "NO"; l2 = `${fmtNum(s.pct, 0)} % ${shortLabel(spec.pos || "sí", Math.max(4, Math.floor(w / 7) - 5))}`; }
+      g.append(el("rect", { x: s._x - w / 2, y: s._y, width: w, height: boxL, rx: 8, fill, "fill-opacity": op, stroke: fill, "stroke-width": 1.6 }));
+      g.append(txt("text", { x: s._x, y: s._y + 21, "text-anchor": "middle", style: "font: 700 15.5px var(--font); fill: var(--ink)" }, l1));
+      g.append(txt("text", { x: s._x, y: s._y + 39, "text-anchor": "middle", style: "font: 600 12px var(--font); fill: var(--ink)" }, l2));
+      g.append(txt("text", { x: s._x, y: s._y + 55, "text-anchor": "middle", style: "font: 400 11.5px var(--font); fill: var(--ink); opacity: .8" }, `${s.n.toLocaleString("es-CO")} casos`));
+      g.append(txt("title", {}, isNum(s.valor) ? `Hoja: predice ${fmtNum(s.valor)} · ${s.n} casos` : `Hoja: ${fmtNum(s.pct, 1)} % de sus ${s.n} casos son «${spec.pos}» → predice ${s.si ? "SÍ" : "NO"}`)); svg.append(g);
+    }
+  }
+  return svg;
+}
+function figArbol(tree, names, tipos, isNumY, pos, yname) {
+  const raiz = arbolASpec(tree, names, tipos, isNumY); if (raiz.hoja || contarHojas(raiz) > 8) return null;
+  return makeFigure({ type: "tree", raiz, pos, yname, title: "El árbol: se lee de arriba abajo", note: isNumY ? "Cada caja de arriba es una pregunta; cada hoja de abajo dice cuánto predice (el promedio de sus casos) y cuántos casos caen ahí. Más oscuro = más alto." : `Cada caja de arriba es una pregunta. Cada hoja dice qué predice (SÍ / NO), qué % de sus casos son «${pos}» y cuántos casos caen ahí. Más intenso = más seguro.` });
 }
 function renderCoefs(spec, W) {
   const n = spec.items.length; const rowH = 30; const labW = Math.min(250, Math.max(40, ...spec.items.map((d) => String(d.label).length)) * 6.8 + 14);
@@ -1687,6 +1791,7 @@ function renderScatter(spec, W) {
   const svg = frame(W, H, spec, m);
   const all = spec.series.flatMap((s) => s.points); let xlo = Infinity, xhi = -Infinity, ylo = Infinity, yhi = -Infinity;
   for (const [x, y] of all) { xlo = Math.min(xlo, x); xhi = Math.max(xhi, x); ylo = Math.min(ylo, y); yhi = Math.max(yhi, y); }
+  if (spec.diagonal) { const lo = Math.min(xlo, ylo), hi = Math.max(xhi, yhi); xlo = ylo = lo; xhi = yhi = hi; }
   if (xlo === xhi) { xlo -= 1; xhi += 1; } if (ylo === yhi) { ylo -= 1; yhi += 1; }
   const xt = niceTicks(xlo, xhi), yt = niceTicks(ylo, yhi); const xmin = Math.min(xlo, xt[0]), xmax = Math.max(xhi, xt[xt.length - 1]), ymin = Math.min(ylo, yt[0]), ymax = Math.max(yhi, yt[yt.length - 1]);
   const X = (v) => m.l + (v - xmin) / (xmax - xmin) * pw, Y = (v) => m.t + ph - (v - ymin) / (ymax - ymin) * ph;
@@ -1695,6 +1800,8 @@ function renderScatter(spec, W) {
   const big = all.length > 2000; const r = big ? 2 : all.length > 500 ? 3 : 4.5; const op = big ? 0.25 : all.length > 500 ? 0.45 : 0.75;
   spec.series.forEach((s, k) => { const color = PALETTE[k % PALETTE.length]; const jitter = all.length > 200 && new Set(all.map((p) => p[0])).size < 30; for (const [x, y, lab] of s.points) { const jx = jitter ? (Math.random() - 0.5) * pw / 60 : 0, jy = jitter ? (Math.random() - 0.5) * ph / 60 : 0; const c = el("circle", { cx: X(x) + jx, cy: Y(y) + jy, r, fill: color, opacity: op }); c.append(txt("title", {}, `${lab != null ? lab + " · " : ""}${spec.xlabel}: ${fmtNum(x)} · ${spec.ylabel}: ${fmtNum(y)}${s.name ? " · " + s.name : ""}`)); svg.append(c); if (lab != null && all.length <= 60) svg.append(txt("text", { x: X(x) + 6, y: Y(y) - 5, class: "ct-val" }, shortLabel(String(lab), 16))); } });
   if (spec.tendencia && all.length > 2) { const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]); const mx = mean(xs), my = mean(ys); let sxy = 0, sxx = 0; for (let i = 0; i < xs.length; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; } const b = sxy / sxx, a = my - b * mx; svg.append(el("line", { x1: X(xmin), y1: Y(a + b * xmin), x2: X(xmax), y2: Y(a + b * xmax), stroke: "var(--danger)", "stroke-width": 2, "stroke-dasharray": "6 4" })); }
+  if (spec.diagonal) { const a = Math.max(xmin, ymin), b = Math.min(xmax, ymax); if (b > a) svg.append(el("line", { x1: X(a), y1: Y(a), x2: X(b), y2: Y(b), stroke: "var(--danger)", "stroke-width": 2, "stroke-dasharray": "6 4" })); }
+  if (spec.escalones) { let d = ""; spec.escalones.forEach(([x, y], i) => { if (isNum(y)) d += (d ? "L" : "M") + X(x) + " " + Y(Math.max(ymin, Math.min(ymax, y))); }); svg.append(el("path", { d, fill: "none", stroke: "var(--warn)", "stroke-width": 3.2 })); }
   svg.append(txt("text", { x: m.l + pw / 2, y: H - 6, class: "ct-label", "text-anchor": "middle" }, spec.xlabel || "")); svg.append(txt("text", { x: 14, y: m.t + ph / 2, class: "ct-label", "text-anchor": "middle", transform: `rotate(-90 14 ${m.t + ph / 2})` }, spec.ylabel || ""));
   if (spec.series.length > 1) legend(svg, spec.series.map((s, k) => [s.name, PALETTE[k % PALETTE.length]]), W - m.r, m.t - 4);
   return svg;
@@ -1754,6 +1861,7 @@ const CHECKS = {
   mujerAnual: () => Math.abs(coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t"] }), "t")) * 365,
   mujerRelativo: () => 100 * CHECKS.mujerAnual() / state.data.diarios.col("mujeres").mean(),
   festivoMujer: () => [[], ["fin_de_semana"], ["quincena"], ["fin_de_semana", "quincena"]].map((extra) => coefDe(regresion_lineal(state.data.diarios, { y: "mujeres", x: ["t", "festivo_fijo", ...extra] }), "festivo_fijo")),
+  pctMujer: () => { const v = state.data.homicidios.col("sexo_victima").values; return 100 * v.filter((x) => x === "Mujer").length / v.length; },
   tontoHombre: () => { const v = state.data.homicidios.col("sexo_victima").values; return [100 * v.filter((x) => x === "Hombre").length / v.length, 100 - 100 * v.filter((x) => x === "Mujer").length / v.length]; },
   sensMujer05: () => 100 * regresion_logistica(baseH(), { y: "es_mujer", x: X_MUJER }).fields.sensibilidad,
   sensMujer02: () => 100 * regresion_logistica(baseH(), { y: "es_mujer", x: X_MUJER, umbral: 0.2 }).fields.sensibilidad,
@@ -1762,11 +1870,16 @@ const CHECKS = {
   exactArmaCirc: () => 100 * regresion_logistica(state.data.homicidios, { y: "arma_fuego", x: ["escenario", "rango_hora", "sexo_victima", "circunstancia"] }).fields.exactitud,
   // Sesión 5
   tontoRina: () => { const r = baseDos().col("es_rina").values; return 100 - 100 * r.filter((x) => x === true).length / r.length; },
-  brecha15: () => { const a = arbol_decision(baseDos(), { y: "es_rina", x: X6, profundidad: 15 }).fields; return 100 * (a.exactitud_entrenamiento - a.exactitud); },
-  bosqueArbol: () => { const a = arbol_decision(baseDos(), { y: "es_rina", x: X6, profundidad: 3 }).fields.exactitud; return [bosque6().fields.exactitud, ...[10, 100].map((n) => bosque_aleatorio(baseDos(), { y: "es_rina", x: X6, arboles: n }).fields.exactitud)].map((b) => 100 * (b - a)); },
-  bosqueArbolSin: () => { const x5 = X6.slice(1); return 100 * (bosque_aleatorio(baseDos(), { y: "es_rina", x: x5, arboles: 40 }).fields.exactitud - arbol_decision(baseDos(), { y: "es_rina", x: x5, profundidad: 3 }).fields.exactitud); },
-  putumayoReg: () => { const h = state.data.homicidios; const d = h.col("departamento").values, c = h.col("circunstancia").values; return d.filter((x, i) => x === "Putumayo" && c[i] !== "Sin información").length; },
-  aciertoMayor: () => { const d = baseDos(); const p = bosque6().fields.predicciones.values, y = d.col("es_rina").values, cv = d.col("ciclo_vital").values; let n = 0, ok = 0; for (let i = 0; i < p.length; i++) if (cv[i] === "Adulto Mayor") { n++; if ((p[i] >= 0.5) === (y[i] === true)) ok++; } return 100 * ok / n; },
+  unaPregunta: () => 100 * arbol_decision(baseDos(), { y: "es_rina", x: ["arma_fuego"], profundidad: 1 }).fields.exactitud,
+  bosqueRina: () => [10, 40, 100].map((n) => 100 * bosque_aleatorio(baseDos(), { y: "es_rina", x: X6, arboles: n }).fields.exactitud),
+  parecenRina: () => { const h = state.data.homicidios; const sin = h.filter(h.col("circunstancia").values.map((v) => v === "Sin información")); const p = predecir(bosque6(), sin).values; return p.filter((v) => isNum(v) && v >= 0.7).length; },
+  domingoMiercoles: () => { const d = state.data.diarios; const m = (dia) => mean(d.col("homicidios").values.filter((_, i) => d.col("dia_semana").values[i] === dia)); return m("domingo") - m("miércoles"); },
+  maeRecta: () => regresion_lineal(state.data.diarios, { y: "homicidios", x: pistasUsuario() }).fields.mae_prueba,
+  maeArbol: () => [2, 3, 6].map((k) => arbol_decision(state.data.diarios, { y: "homicidios", x: pistasUsuario(), profundidad: k }).fields.mae),
+  domingoPlan: () => { const d = state.data.diarios; const a = arbol_decision(d, { y: "homicidios", x: ["dia_num", "anio", "festivo", "quincena"], profundidad: 3 }); const p = a.fields.predicciones.values; const v = p.filter((_, i) => d.col("anio").values[i] === 2005 && d.col("dia_semana").values[i] === "domingo"); return mean(v); },
+  pctCuidador: () => 100 * vifUsuario().col("cuidador").mean(),
+  corteEdad: () => { const a = arbol_decision(vifUsuario(), { y: "cuidador", x: ["edad_aprox"], profundidad: 2 }); const m = String(a.fields.arbol).match(/edad_aprox ≤ ([\d.,]+)/); return m ? Number(m[1].replace(/\./g, "").replace(",", ".")) : NaN; },
+  hermanoAdultos: () => { const v = state.data.vif; const e = v.col("edad_aprox").values, ag = v.col("agresor").values; let n = 0, h = 0; for (let i = 0; i < e.length; i++) if (isNum(e[i]) && e[i] > 17) { n++; if (ag[i] === "Hermano") h++; } return 100 * h / n; },
 };
 /* Bases derivadas para las cerraduras (se calculan una vez, siempre desde los datos originales) */
 const _memo = new Map();
@@ -1776,7 +1889,10 @@ const X6 = ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "e
 function coefDe(res, nombre) { const c = res.fields.coeficientes; return c.data.coeficiente[c.data.variable.indexOf(nombre)]; }
 function baseH() { return memo("H", () => { const h = state.data.homicidios.copy(); h.setColumn("es_mujer", h.col("sexo_victima").values.map((v) => v === "Mujer")); h.setColumn("en_vivienda", h.col("escenario").values.map((v) => v === "Vivienda")); h.setColumn("arma_blanca", h.col("mecanismo").values.map((v) => v === "Cortopunzante")); return h; }); }
 function baseDos() { return memo("dos", () => { const h = state.data.homicidios; const d = h.filter(h.col("circunstancia").values.map((v) => v === "Riña" || v === "Venganza o ajuste de cuentas")); d.setColumn("es_rina", d.col("circunstancia").values.map((v) => v === "Riña")); return d; }); }
-function bosque6() { return memo("b6", () => bosque_aleatorio(baseDos(), { y: "es_rina", x: X6, arboles: 40 })); }
+function bosque6() { return memo("b6", () => __envolver(bosque_aleatorio)(baseDos(), { y: "es_rina", x: X6, arboles: 40 })); }
+/* Lo que el estudiante armó en el cuaderno (si existe), para que la cerradura compruebe SU modelo */
+function pistasUsuario() { const v = state.globals && state.globals.get("pistas"); const ok = Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && state.data.diarios.columns.includes(x)); return ok ? [...v] : ["dia_num", "anio", "festivo", "quincena"]; }
+function vifUsuario() { const v = state.globals && state.globals.get("vif"); if (v instanceof DataFrame && v.columns.includes("cuidador")) return v; return memo("vifC", () => { const d = state.data.vif.copy(); d.setColumn("cuidador", d.col("agresor").values.map((x) => ["Padre", "Madre", "Padrastro", "Madrastra"].includes(x))); return d; }); }
 
 /* Andamiaje de la sesión 3: cada espacio ___ de un esqueleto tiene opciones para elegir (sin teclear código).
    op: valor (texto) o { v: valor, t: etiqueta, d: descripción }; si no hay d, se usa el diccionario de columnas. */
@@ -2083,7 +2199,11 @@ const MISIONES = [
         pista: "Crea una columna verdadero/falso con lo que quieres detectar. Su promedio es la proporción de «verdaderos». El «modelo tonto» siempre dice la clase más frecuente: acierta en todos los demás casos.",
         esq: "homicidios[\"es_mujer\"] = homicidios[\"sexo_victima\"] == \"___\"\n(homicidios[\"es_mujer\"].mean() * 100).round(1)",
         huecos: [{ q: "¿Qué valor de sexo_victima marca los casos que quieres detectar?", op: ["Hombre", "Indeterminado", "Mujer"] }],
-        cer: { q: "¿Cuánto acertaría el modelo tonto que siempre dice «hombre»?", unidad: "%", tol: 0.2, calc: "tontoHombre", ayuda: "Si el resultado es el % de mujeres, el modelo tonto acierta en todos los demás casos: 100 menos ese número." } },
+        cer: { q: "¿Qué porcentaje de las víctimas son mujeres?", unidad: "%", tol: 0.2, calc: "pctMujer", ayuda: "Si te salió un número alto (cerca de 91 %), elegiste «Hombre»: vuelve al espacio, elige «Mujer» y ejecuta otra vez. Todo lo que sigue depende de esta columna.", despues: "Pocas: menos de 1 de cada 10 víctimas." },
+        dec: { q: "Un «modelo tonto» dice siempre «la víctima es hombre». ¿Cuánto acierta?", op: [
+          { t: "Cerca de 9 %", ok: false, fb: "Ese es el porcentaje de mujeres: justo los casos en que el modelo tonto se equivoca." },
+          { t: "Cerca de 50 %", ok: false, fb: "Solo pasaría si hubiera tantas víctimas mujeres como hombres." },
+          { t: "Cerca de 91 %", ok: true, fb: "Exacto: acierta con todos los hombres (100 − 8,6). Ese es el número que cualquier modelo tiene que superar." } ] } },
       { q: "Explicar: ¿qué características hacen más probable que la víctima sea mujer?",
         pista: "Creamos dos columnas sencillas: si ocurrió en una vivienda y si fue con arma blanca. En la tabla, el odds ratio es la pista: mayor que 1 hace más probable «mujer»; menor que 1, menos probable; cerca de 1, no cambia nada.",
         esq: "homicidios[\"en_vivienda\"] = homicidios[\"escenario\"] == \"Vivienda\"\nhomicidios[\"arma_blanca\"] = homicidios[\"mecanismo\"] == \"Cortopunzante\"\nm = regresion_logistica(homicidios, y=\"es_mujer\", x=[___])\nm",
@@ -2096,7 +2216,7 @@ const MISIONES = [
         pista: "Ahora usamos cuatro variables fijas. Compara la exactitud con la del modelo tonto y luego mira la sensibilidad: de las víctimas que sí eran mujeres, ¿a cuántas detectó el modelo?",
         esq: "m = regresion_logistica(homicidios, y=\"___\", x=[\"en_vivienda\", \"arma_blanca\", \"arma_fuego\", \"edad_aprox\"])\nm",
         huecos: [{ q: "¿Qué quieres que el modelo prediga (y)? Las x ya están puestas.", op: [{ v: "en_vivienda", d: "Si ocurrió en una vivienda" }, { v: "es_mujer", d: "Si la víctima es mujer" }, { v: "arma_fuego", d: "Si fue con arma de fuego" }] }],
-        cer: { q: "¿Qué sensibilidad tiene el modelo?", unidad: "%", tol: 0.3, calc: "sensMujer05", ayuda: "Está en el resumen del modelo: «Sensibilidad (detecta positivos)».", despues: "Acierta más del 91 %… y casi no detecta a ninguna víctima mujer." },
+        cer: { q: "¿Qué sensibilidad tiene el modelo?", unidad: "%", tol: 0.3, calc: "sensMujer05", ayuda: "Está en el resumen del modelo: «Sensibilidad (detecta positivos)». ¿Elegiste y = es_mujer? Si te sale cerca de 99 %, la columna es_mujer quedó marcando a los hombres: vuelve al paso 1, elige «Mujer» y ejecuta otra vez.", despues: "Acierta más del 91 %… y casi no detecta a ninguna víctima mujer." },
         dec: { q: "¿Lo usarías como alerta?", op: [
           { t: "Sí: acierta más del 91 %", ok: false, fb: "El modelo tonto acierta casi lo mismo sin detectar a nadie. Una alerta que no suena no sirve." },
           { t: "No así: explica la diferencia, pero casi nunca dice «mujer»", ok: true, fb: "Exacto: explicar no es predecir. Los odds ratios son fuertes, pero casi ninguna combinación lleva la probabilidad por encima de 50 %, así que el modelo casi nunca dice «sí»." } ] } },
@@ -2104,7 +2224,7 @@ const MISIONES = [
         pista: "El umbral es la probabilidad a partir de la cual el modelo dice «sí». Bajarlo detecta más casos, pero también da más falsas alarmas. Prueba varios y mira la matriz de confusión: filas = realidad, columnas = lo que dijo el modelo.",
         esq: "m = regresion_logistica(homicidios, y=\"es_mujer\", x=[\"en_vivienda\", \"arma_blanca\", \"arma_fuego\", \"edad_aprox\"], umbral=___)\nm",
         huecos: [{ q: "¿Desde qué probabilidad debe sonar la alerta?", op: [{ v: "0.5", d: "Suena si la probabilidad es 50 % o más" }, { v: "0.3", d: "Suena desde 30 %" }, { v: "0.2", d: "Suena desde 20 %" }, { v: "0.1", d: "Suena desde 10 %" }] }],
-        cer: { q: "Con umbral 0,2, ¿qué sensibilidad tiene?", unidad: "%", tol: 0.3, calc: "sensMujer02", ayuda: "Elige 0.2 en el espacio y busca la sensibilidad en el resumen.", despues: "Detecta más, pero mira cuántas falsas alarmas aparecen en la matriz." },
+        cer: { q: "Con umbral 0,2, ¿qué sensibilidad tiene?", unidad: "%", tol: 0.3, calc: "sensMujer02", ayuda: "Elige 0.2 en el espacio y busca la sensibilidad en el resumen. Si te sale cerca de 100 %, revisa el paso 1: ¿elegiste «Mujer»?", despues: "Detecta más, pero mira cuántas falsas alarmas aparecen en la matriz." },
         dec: { q: "Si cada alerta la revisa a mano una fiscal especializada, ¿qué umbral eliges?", abierta: true, fb: "No hay una única respuesta: justifícala con la matriz de confusión (cuántos casos detectas y cuántas falsas alarmas tendría que revisar).", op: [{ t: "0,5" }, { t: "0,3" }, { t: "0,2" }, { t: "0,1" }] },
         nota: { q: "¿Por qué ese umbral? Usa los números de la matriz de confusión." } },
     ],
@@ -2145,90 +2265,114 @@ const MISIONES = [
     ],
     veredicto: "¿Predice el contexto el uso de arma de fuego? ¿Cuánto mejoró tu grupo frente al modelo tonto y qué error es más costoso?" },
 
-  /* ---------------- SESIÓN 5 · Árboles, bosques y límites (formato «pensar antes de insertar») ---------------- */
-  { id: "5-1", sesion: 5, titulo: "¿Riña o ajuste de cuentas?", concepto: "Árboles de decisión: leer reglas y sobreajuste",
-    historia: "Un fiscal tiene cientos de homicidios sin la circunstancia registrada. Pregunta si con lo que sí queda en el expediente (el arma, el día, la hora, el lugar) se podría distinguir una riña de un ajuste de cuentas. Construye el interrogatorio con los 2.132 casos en que la circunstancia sí se conoce.",
-    hipotesis: "Con dos o tres preguntas se puede distinguir una riña de un ajuste de cuentas.",
-    prediccion: { q: "¿Cuál crees que será la primera pregunta del árbol?", op: ["¿Fue con arma de fuego?", "¿Fue en fin de semana?", "¿Fue de madrugada?", "¿Fue en un bar o un lugar con alcohol?", "¿La víctima era joven?"] },
+  /* ---------------- SESIÓN 5 · Árboles y bosques que predicen y se usan ---------------- */
+  { id: "5-1", sesion: 5, titulo: "¿Riña o ajuste de cuentas?", concepto: "Árbol de clasificación, bosque y predicción de casos nuevos",
+    historia: "En esta muestra hay 7.909 homicidios sin la circunstancia registrada. Dos unidades se los quieren repartir: la de convivencia (riñas: alcohol, intolerancia, fines de semana) y la de crimen organizado (ajustes de cuentas). Entrena un modelo con los 2.132 casos en que sí se sabe qué pasó y úsalo para decidir qué casos mirar primero y dónde.",
+    hipotesis: "Con lo que sí queda en el expediente (el arma, el día, la hora, el lugar) se puede saber con buena precisión si un homicidio fue una riña o un ajuste de cuentas.",
+    prediccion: { q: "¿Cuál crees que será la pregunta que mejor separa una riña de un ajuste de cuentas?", op: ["¿Fue con arma de fuego?", "¿Fue en fin de semana?", "¿Fue de noche o de madrugada?", "¿Fue en un bar o un lugar con alcohol?", "¿La víctima era joven?"] },
     pasos: [
-      { q: "¿Cuántas de estas muertes fueron riñas?",
-        pista: "El árbol solo puede aprender de casos en los que se sabe la respuesta. Quédate con las dos circunstancias que quieres distinguir; luego se crea la columna que el árbol va a predecir (verdadero si fue riña). Su promedio es la proporción de riñas.",
+      { q: "¿Contra qué compite el modelo?",
+        pista: "El modelo solo puede aprender de casos en los que se sabe la respuesta. Quédate con las dos circunstancias que quieres distinguir; la columna es_rina es verdadera si fue riña y su promedio es la proporción de riñas.",
         esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([___])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\n(dos[\"es_rina\"].mean() * 100).round(1)",
         huecos: [{ tipo: "lista", min: 2, max: 2, q: "¿Con qué dos circunstancias se queda la tabla?", op: [{ v: "Sin información", d: "No se sabe qué pasó" }, { v: "Riña" }, { v: "Atraco callejero o intento de", d: "Robo en la calle" }, { v: "Venganza o ajuste de cuentas" }, { v: "Otro" }] }],
-        cer: { q: "¿Cuánto acertaría un modelo que siempre dice «ajuste de cuentas»?", unidad: "%", tol: 0.5, calc: "tontoRina", ayuda: "El resultado es el % de riñas. El modelo tonto acierta en todos los demás casos. ¿Elegiste riña y ajuste de cuentas?", despues: "Ese es el número que el árbol tiene que superar." } },
-      { q: "Arma tu interrogatorio de dos preguntas.",
-        pista: "Un árbol de profundidad 2 hace dos preguntas seguidas. Léelo de arriba abajo: cada «¿…?» divide los casos en Sí y No, y cada hoja dice qué predice y qué % de sus casos son riñas.",
-        esq: "arbol_decision(dos, y=\"es_rina\", x=[___], profundidad=2)",
-        huecos: [{ tipo: "lista", min: 2, max: 4, q: "Elige de 2 a 4 pistas que el árbol pueda usar.", op: ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "edad_aprox", "sexo_victima"] }],
-        dec: { q: "Compara la exactitud en prueba con la del modelo tonto (cerca de 63 %).", abierta: true, op: [
-          { t: "Mejora más de 10 puntos", fb: "Bien. Mira cuál fue la primera pregunta: ¿coincide con tu apuesta?" },
-          { t: "Mejora poco o nada", fb: "Prueba agregando arma_fuego (o quitándola, para ver cuánto pesa). El árbol solo puede preguntar por lo que le das." } ] },
-        nota: { q: "Escribe la regla principal del árbol en una frase: «Si …, entonces …»." } },
-      { q: "¿Y si el interrogatorio sigue preguntando?",
-        pista: "Ahora el árbol tiene seis pistas fijas y tú decides cuántas preguntas seguidas puede hacer (profundidad). Compara la exactitud en entrenamiento (los casos que vio) con la de prueba (casos nuevos).",
-        esq: "x6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\narbol_decision(dos, y=\"es_rina\", x=x6, profundidad=___)",
-        huecos: [{ q: "¿Cuántas preguntas seguidas puede hacer?", op: [{ v: "2", d: "Se lee en voz alta" }, { v: "4" }, { v: "8" }, { v: "15", d: "Ya nadie lo puede leer" }] }],
-        cer: { q: "Con profundidad 15, ¿cuántos puntos de diferencia hay entre entrenamiento y prueba?", tol: 0.4, calc: "brecha15", ayuda: "Resta: exactitud en entrenamiento menos exactitud en prueba.", despues: "Acierta más en los casos que ya vio y menos en los nuevos: memorizó." },
-        dec: { q: "¿Qué profundidad le presentarías al fiscal?", op: [
-          { t: "15: es la que más acierta en entrenamiento", ok: false, fb: "Entrenamiento son los casos que el árbol ya vio. En casos nuevos (prueba), 15 acierta menos que 2. Eso es sobreajuste." },
-          { t: "2 o 3: acierta igual o más en casos nuevos y se puede leer", ok: true, fb: "Exacto: más preguntas no siempre es mejor. Un árbol corto se puede explicar y aquí además acierta más en casos nuevos." } ] } },
+        cer: { q: "¿Cuánto acertaría un modelo tonto que siempre dice «ajuste de cuentas»?", unidad: "%", tol: 0.5, calc: "tontoRina", ayuda: "El resultado es el % de riñas. El modelo tonto acierta en todos los demás casos (100 menos ese número). ¿Elegiste riña y ajuste de cuentas?", despues: "Esa es la vara: el modelo tiene que superar claramente ese número." } },
+      { q: "Un interrogatorio de una sola pregunta.",
+        pista: "Un árbol de profundidad 1 hace una sola pregunta y parte los casos en dos hojas. Prueba varias pistas (puedes volver a armar el código) y quédate con la que más sube la exactitud en prueba sobre el modelo tonto. Lee el diagrama: cada hoja dice qué % de sus casos fueron riñas.",
+        esq: "arbol1 = arbol_decision(dos, y=\"es_rina\", x=[\"___\"], profundidad=1)\narbol1",
+        huecos: [{ q: "¿Qué pregunta le haces a cada caso?", op: ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "edad_aprox", "zona"] }],
+        cer: { q: "¿Qué exactitud en prueba logra la MEJOR pregunta?", unidad: "%", tol: 0.4, calc: "unaPregunta", ayuda: "Prueba las pistas una por una: casi todas se quedan en el nivel del modelo tonto (≈ 63 %). Una sola salta muy por encima.", despues: "Una sola pregunta sube la exactitud unos 18 puntos sobre el modelo tonto." },
+        dec: { q: "¿Qué dice la regla del árbol?", op: [
+          { t: "Si hubo arma de fuego, casi siempre fue riña", ok: false, fb: "Al revés: mira las hojas. Con arma de fuego solo el 15 % fueron riñas." },
+          { t: "Sin arma de fuego, unas 8 de cada 10 fueron riñas; con arma de fuego, casi todas fueron ajustes de cuentas", ok: true, fb: "Exacto. Es una distinción clásica en criminología: la violencia impulsiva (riña) se hace con lo que hay a mano; la instrumental (ajuste) se planea y usa armas de fuego." },
+          { t: "El arma no cambia nada", ok: false, fb: "Compara las dos hojas: 15 % de riñas con arma de fuego contra cerca de 81 % sin ella. Es la pregunta que más separa." } ] } },
+      { q: "El bosque: una probabilidad para cada caso.",
+        pista: "Un bosque entrena muchos árboles, cada uno con una muestra distinta de casos y de pistas, y los pone a votar. Su ventaja práctica: no solo dice sí o no, da una probabilidad distinta para cada caso (la proporción de árboles que votan «riña»). Así se pueden ordenar los casos del más claro al más dudoso.",
+        esq: "pistas6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\nbosque = bosque_aleatorio(dos, y=\"es_rina\", x=pistas6, arboles=___)\nbosque",
+        huecos: [{ q: "¿Cuántos árboles votan?", op: [{ v: "10", d: "Rápido" }, { v: "40", d: "Lo usual en el laboratorio" }, { v: "100", d: "Tarda unos segundos más" }] }],
+        cer: { q: "¿Qué exactitud en prueba tiene el bosque?", unidad: "%", tol: 0.4, calc: "bosqueRina", ayuda: "Es la fila «Exactitud en prueba» del resultado.", despues: "Acierta 8 de cada 10 casos nuevos: casi 19 puntos sobre el modelo tonto." },
+        dec: { q: "El bosque acierta casi lo mismo que el árbol de una pregunta. ¿Para qué sirve, entonces?", op: [
+          { t: "Para nada: mejor el árbol", ok: false, fb: "Para explicar, el árbol es mejor. Pero el árbol de una pregunta solo da dos probabilidades (15 % u 81 %). Para ordenar 7.909 casos se necesita algo más fino." },
+          { t: "Para dar una probabilidad distinta a cada caso y así ordenar cuáles revisar primero", ok: true, fb: "Exacto. Mira la importancia: el arma pesa mucho, pero la hora, el día, el lugar y la edad afinan la probabilidad de cada caso." },
+          { t: "Para conocer la causa de cada homicidio", ok: false, fb: "El bosque predice a partir de patrones; no conoce la causa. Por eso sus resultados orientan, no prueban." } ] } },
+      { q: "Úsalo: ¿qué casos sin circunstancia van primero a la unidad de convivencia?",
+        pista: "predecir(bosque, tabla) le pregunta al bosque por cada caso de la tabla nueva y devuelve la probabilidad de riña. Tú decides desde qué probabilidad un caso «parece riña» y pasa primero a la unidad de convivencia. Ojo: el modelo solo conoce dos opciones; si un caso fue un atraco, igual lo pondrá en alguna.",
+        esq: "bosque = bosque_aleatorio(dos, y=\"es_rina\", x=[\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"])\nsin = homicidios[homicidios[\"circunstancia\"] == \"Sin información\"].copy()\nsin[\"prob_rina\"] = predecir(bosque, sin)\nsin[\"parece_rina\"] = sin[\"prob_rina\"] >= ___\nprint(\"Casos que parecen riña:\", sin[\"parece_rina\"].sum(), \"de\", len(sin))\nsin.groupby(\"departamento\")[\"parece_rina\"].sum().sort_values(ascending=False).head(8)",
+        huecos: [{ q: "¿Desde qué probabilidad un caso «parece riña»?", op: [{ v: "0.5", d: "Más casos, más errores" }, { v: "0.7", d: "Un punto medio" }, { v: "0.9", d: "Menos casos, más seguros" }] }],
+        cer: { q: "Con el umbral de 0,7, ¿cuántos casos sin circunstancia parecen riña?", tol: 0.5, calc: "parecenRina", ayuda: "Elige 0.7 y lee la primera línea del resultado.", despues: "Casi 1.900 casos: uno de cada cuatro homicidios sin circunstancia tiene el perfil de una riña. La tabla dice dónde están." },
+        dec: { q: "La Secretaría de Seguridad quiere usar esta lista. ¿Qué uso recomiendas?", op: [
+          { t: "Registrar esos casos como riñas en el sistema oficial", ok: false, fb: "Eso sería convertir una predicción en un hecho. El modelo se equivoca en 2 de cada 10 casos y nunca vio atracos ni otras circunstancias." },
+          { t: "Priorizar qué casos revisar primero y dimensionar los programas de convivencia por departamento, con revisión humana", ok: true, fb: "Exacto: se usa para planear y priorizar (en agregado), no para etiquetar personas o cerrar casos. Así un error no le cae a nadie en particular." },
+          { t: "Nada: un modelo nunca debe usarse", ok: false, fb: "Bien usado, ahorra tiempo y orienta recursos. Lo importante son las reglas de uso." } ] } },
     ],
-    veredicto: "¿Se puede distinguir una riña de un ajuste de cuentas con dos o tres preguntas? ¿Cuál es la regla y cuánto se equivoca?" },
+    veredicto: "¿Qué tan bien distingue el modelo una riña de un ajuste de cuentas? ¿Cuántos casos sin circunstancia irían primero a la unidad de convivencia y dónde están? ¿Para qué NO usarías el modelo?" },
 
-  { id: "5-2", sesion: 5, titulo: "El bosque contra el árbol", concepto: "Bosque aleatorio, importancia de variables y legibilidad",
-    historia: "Un analista dice: «el bosque siempre gana; olvidemos el árbol». Pon a competir los dos en la misma pregunta (¿riña o ajuste de cuentas?) y decide qué ganas y qué pierdes con cada uno.",
-    hipotesis: "El bosque acierta claramente más que un solo árbol.",
-    prediccion: { q: "¿Cuántos puntos crees que le saca el bosque al árbol?", op: ["Ninguno o casi ninguno", "Entre 2 y 5 puntos", "Más de 5 puntos"] },
+  { id: "5-2", sesion: 5, titulo: "¿Qué días reforzar?", concepto: "Árbol de regresión contra la recta: escalones, error y un plan",
+    historia: "La Policía y los hospitales planean sus turnos con el promedio: unos 55 homicidios por día en todo el país (2003-2005). ¿Se puede pronosticar mejor con el calendario? Compara una recta (regresión lineal) con un árbol de regresión y convierte el mejor en un plan de refuerzo por día de la semana.",
+    hipotesis: "Basta con el promedio: todos los días se parecen.",
+    prediccion: { q: "En promedio, ¿cuántos homicidios más crees que tiene un domingo que un miércoles?", op: ["Casi igual (menos de 5)", "Unos 10", "Unos 25", "El doble (más de 45)"] },
     pasos: [
-      { q: "La competencia: bosque contra árbol, con las mismas seis pistas.",
-        pista: "Se corren los dos con las mismas seis pistas: un árbol de tres preguntas y un bosque de muchos árboles que votan. Compara sus exactitudes en prueba.",
-        esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([\"Riña\", \"Venganza o ajuste de cuentas\"])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\nx6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\narbol = arbol_decision(dos, y=\"es_rina\", x=x6, profundidad=3)\nbosque = bosque_aleatorio(dos, y=\"es_rina\", x=x6, arboles=___)\nprint(\"Árbol:\", round(arbol.exactitud * 100, 1), \"%  ·  Bosque:\", round(bosque.exactitud * 100, 1), \"%\")",
-        huecos: [{ q: "¿Cuántos árboles votan en el bosque?", op: [{ v: "10", d: "Rápido" }, { v: "40", d: "Lo usual en el laboratorio" }, { v: "100", d: "Tarda unos segundos más" }] }],
-        cer: { q: "¿Cuántos puntos le saca el bosque al árbol? (bosque menos árbol)", tol: 0.25, calc: "bosqueArbol", ayuda: "Resta las dos exactitudes que aparecen: la del bosque menos la del árbol." } },
-      { q: "¿Por qué no gana?",
-        pista: "La importancia dice cuánto usó el modelo cada variable para separar los casos (entre todas suman 100 %).",
-        esq: "grafico_barras(___.importancia, horizontal=True, titulo=\"¿Qué miró el modelo?\")",
-        huecos: [{ q: "¿De qué modelo quieres ver la importancia? Puedes mirar los dos.", op: [{ v: "bosque", d: "El bosque del paso anterior" }, { v: "arbol", d: "El árbol de tres preguntas" }] }],
-        dec: { q: "¿Por qué el bosque casi no le gana al árbol aquí?", op: [
-          { t: "Porque 40 árboles son muy pocos", ok: false, fb: "Puedes probar con 100: el resultado casi no cambia. El problema no es cuántos árboles votan." },
-          { t: "Porque el bosque está mal programado", ok: false, fb: "Hace lo que debe: votar. Si todos los árboles ven lo mismo, votan lo mismo." },
-          { t: "Porque una sola pregunta (¿arma de fuego?) ya dice casi todo y a los demás árboles les queda poco por añadir", ok: true, fb: "Exacto: cuando una variable domina, un árbol corto basta. El bosque brilla cuando la información está repartida entre muchas variables." } ] } },
-      { q: "Quítale el arma: ¿ahora quién gana?",
-        pista: "Deja las cinco pistas que NO son el arma. Sin arma_fuego, la información queda repartida entre el día, la hora, el lugar y la zona.",
-        huecos: [{ tipo: "lista", min: 5, max: 5, q: "Marca las cinco pistas que se quedan.", op: ["arma_fuego", "fin_de_semana", "rango_hora", "escenario", "zona", "edad_aprox"] }],
-        esq: "x5 = [___]\narbol5 = arbol_decision(dos, y=\"es_rina\", x=x5, profundidad=3)\nbosque5 = bosque_aleatorio(dos, y=\"es_rina\", x=x5, arboles=40)\nprint(\"Árbol:\", round(arbol5.exactitud * 100, 1), \"%  ·  Bosque:\", round(bosque5.exactitud * 100, 1), \"%\")",
-        cer: { q: "¿Cuántos puntos le saca ahora el bosque al árbol?", tol: 0.25, calc: "bosqueArbolSin", ayuda: "¿Dejaste por fuera a arma_fuego? Resta: bosque menos árbol.", despues: "Ahora sí gana, aunque los dos aciertan bastante menos que con el arma." },
-        dec: { q: "Un juez pide entender por qué el modelo dice «riña» en un caso concreto. ¿Qué le muestras?", abierta: true, fb: "Defiéndelo en tu veredicto: lo que ganas en exactitud frente a lo que pierdes en explicación.", op: [{ t: "El árbol: lo puede leer" }, { t: "El bosque: acierta más" }, { t: "Los dos, explicando la diferencia" }] } },
+      { q: "¿Todos los días se parecen?",
+        pista: "Agrupa los días por la columna que dice qué día de la semana es y saca el promedio de homicidios.",
+        esq: "diarios.groupby(\"___\")[\"homicidios\"].mean().round(1)",
+        huecos: [{ q: "¿Por qué columna agrupas?", op: ["dia_semana", "mes_num", "quincena", "festivo"] }],
+        cer: { q: "En promedio, ¿cuántos homicidios más tiene un domingo que un miércoles?", tol: 0.3, calc: "domingoMiercoles", ayuda: "Elige dia_semana y resta: domingo menos miércoles.", despues: "Un domingo tiene la mitad más que un miércoles. Planear con el promedio deja cortos los domingos y sobrados los martes." } },
+      { q: "La recta: una regresión lineal con el calendario.",
+        pista: "Elige las pistas del calendario. Ojo con dia_num: va de 1 (lunes) a 7 (domingo) y la recta solo puede ir subiendo o bajando con él. En el resultado busca el error en casos nuevos (MAE en prueba) y compáralo con el del modelo tonto.",
+        esq: "pistas = [___]\nrecta = regresion_lineal(diarios, y=\"homicidios\", x=pistas)\nrecta",
+        huecos: [{ tipo: "lista", min: 2, max: 4, q: "Elige de 2 a 4 pistas del calendario.", op: ["dia_num", "anio", "mes_num", "festivo", "quincena", "navidad_o_anio_nuevo"] }],
+        cer: { q: "¿Cuántos homicidios se equivoca la recta, en promedio, en días nuevos (MAE en prueba)?", tol: 0.05, calc: "maeRecta", ayuda: "Es la fila «MAE en casos nuevos (prueba)».", despues: "Compáralo con el modelo tonto (que dice siempre el promedio): ¿cuánto mejoró?" } },
+      { q: "El árbol: escalones en vez de una recta.",
+        pista: "Con las mismas pistas, el árbol pregunta «¿es domingo?», «¿es 2003?»… y en cada hoja predice el promedio de sus días. Lee el diagrama y compara su MAE en prueba con el de la recta.",
+        esq: "arbol = arbol_decision(diarios, y=\"homicidios\", x=pistas, profundidad=___)\narbol",
+        huecos: [{ q: "¿Cuántas preguntas seguidas puede hacer?", op: [{ v: "2", d: "4 hojas" }, { v: "3", d: "8 hojas: se lee en un diagrama" }, { v: "6", d: "Hasta 64 hojas" }] }],
+        cer: { q: "¿Cuántos homicidios se equivoca el árbol, en promedio, en días nuevos (MAE en prueba)?", tol: 0.05, calc: "maeArbol", ayuda: "Es la fila «MAE en prueba (error promedio en casos nuevos)». Si cambiaste las pistas, vuelve a correr el paso anterior." },
+        dec: { q: "¿Por qué el árbol se equivoca menos que la recta (si usaste dia_num)?", op: [
+          { t: "Porque el árbol usa más datos", ok: false, fb: "Usan los mismos días y las mismas pistas." },
+          { t: "Porque la recta trata lunes → domingo como una rampa; el árbol separa el domingo y el sábado del resto, que es la forma real", ok: true, fb: "Exacto: la recta solo puede subir o bajar; los escalones siguen la forma de los datos. Si a la recta le das dia_semana (cada día por separado), mejora mucho: el árbol encontró la forma solo; a la recta hay que decírsela." },
+          { t: "Porque el árbol memoriza los días", ok: false, fb: "Si memorizara, acertaría mucho en entrenamiento y poco en prueba. Compara los dos R²: aquí son parecidos." } ] } },
+      { q: "El plan de refuerzo para 2005.",
+        pista: "Se guarda el pronóstico del árbol para cada día y se resume por día de la semana para 2005: es lo que el árbol espera que pase cada día. Con eso se calcula cuánto refuerzo poner.",
+        esq: "plan = arbol_decision(diarios, y=\"homicidios\", x=[\"dia_num\", \"anio\", \"festivo\", \"quincena\"], profundidad=3)\ndiarios[\"pronostico\"] = plan.predicciones\ndiarios[diarios[\"anio\"] == 2005].groupby(\"___\")[\"pronostico\"].mean().round(1)",
+        huecos: [{ q: "¿Cómo resumes el pronóstico?", op: [{ v: "dia_semana", d: "Un número por día de la semana" }, { v: "mes_num", d: "Un número por mes" }, { v: "quincena", d: "Días de quincena contra el resto" }] }],
+        cer: { q: "¿Cuántos homicidios espera el plan para un domingo de 2005?", tol: 0.3, calc: "domingoPlan", ayuda: "Elige dia_semana y lee la fila domingo.", despues: "Contra unos 41 entre semana: el domingo necesita cerca de 65 % más capacidad." },
+        nota: { q: "Escribe el plan en una o dos frases: qué días reforzar, cuánto y por qué (con los números del árbol)." } },
     ],
-    veredicto: "¿Siempre gana el bosque? ¿Cuándo usarías cada uno?" },
+    veredicto: "¿Cuánto mejora el árbol al promedio y a la recta? ¿Qué días reforzarías y cuánto?" },
 
-  { id: "5-3", sesion: 5, titulo: "¿Llenamos los vacíos?", concepto: "Ética: el modelo hereda el registro y no se equivoca igual con todos",
-    historia: "La Fiscalía propone usar el bosque del expediente anterior para «llenar» la circunstancia de los homicidios que no la tienen y así reportar cuántos fueron riñas y cuántos ajustes de cuentas. Antes de aprobarlo, revisa de dónde aprendió el modelo y con quién se equivoca.",
-    hipotesis: "Si el modelo acierta 82 %, se puede usar para llenar la circunstancia que falta.",
-    prediccion: { q: "¿Crees que funcionaría igual de bien en los casos sin información?", op: ["Sí, acertaría parecido", "Peor: esos casos pueden ser distintos", "No se puede saber sin revisar"] },
+  { id: "5-3", sesion: 5, titulo: "¿Quién agrede en casa?", concepto: "El árbol encuentra los cortes: edades y focalización de la prevención",
+    historia: "Una Comisaría de Familia tiene tres programas de prevención: escuela de padres, convivencia entre hermanos y cuidado de adultos mayores. Quiere saber a quién dirigir cada uno: según la edad de la víctima, ¿quién es el agresor más probable? Un árbol puede encontrar solo las edades donde cambia el patrón.",
+    hipotesis: "El agresor se parece a cualquier edad: no vale la pena separar los programas por edad.",
+    prediccion: { q: "¿Hasta qué edad crees que el agresor más probable es quien cría (papá, mamá, padrastro…)?", op: ["Hasta los 10 años", "Hasta los 14 años", "Hasta los 17 años", "A cualquier edad"] },
     pasos: [
-      { q: "¿De dónde aprendió el modelo?",
-        pista: "Cuenta, por departamento, cuántos homicidios tienen la circunstancia registrada (True) y cuántos no (False). El modelo solo pudo aprender de los True; tendría que llenar los False.",
-        esq: "homicidios[\"registrada\"] = homicidios[\"circunstancia\"] != \"Sin información\"\ntabla = pd.crosstab(homicidios[\"departamento\"], homicidios[\"registrada\"])\ntabla.sort_values(\"___\", ascending=False)",
-        huecos: [{ q: "¿Por qué columna ordenas la tabla?", op: [{ v: "True", d: "Casos con la circunstancia: de ellos aprende el modelo" }, { v: "False", d: "Casos sin la circunstancia: el modelo tendría que llenarlos" }] }],
-        cer: { q: "En el Putumayo, ¿de cuántos casos con la circunstancia registrada podría aprender el modelo?", tol: 0.5, calc: "putumayoReg", ayuda: "Busca la fila Putumayo y la columna True.", despues: "Y tendría que llenar más de 120 casos de allí." },
-        dec: { q: "Para llenar esos casos del Putumayo, el modelo usaría lo que aprendió de 12 casos de allí y de miles de otros departamentos. ¿Qué está suponiendo?", op: [
-          { t: "Nada: los datos son los datos", ok: false, fb: "El modelo aprendió sobre todo de los departamentos que sí registran. Aplicarlo al Putumayo supone que allí la violencia se ve igual." },
-          { t: "Que en el Putumayo las riñas y los ajustes se parecen a los de los departamentos que sí registran", ok: true, fb: "Eso es: el modelo hereda el registro. Lo que no se anotó no lo puede aprender, y lo rellena con lo que vio en otros lugares." } ] } },
-      { q: "¿Se equivoca igual con todos?",
-        pista: "Guardamos lo que dice el bosque para cada caso y si acertó. Luego comparamos el % de aciertos por grupo. Mira también cuántos casos tiene cada grupo: con pocos casos, los porcentajes saltan mucho.",
-        esq: "dos = homicidios[homicidios[\"circunstancia\"].isin([\"Riña\", \"Venganza o ajuste de cuentas\"])].copy()\ndos[\"es_rina\"] = dos[\"circunstancia\"] == \"Riña\"\nx6 = [\"arma_fuego\", \"fin_de_semana\", \"rango_hora\", \"escenario\", \"zona\", \"edad_aprox\"]\nbosque = bosque_aleatorio(dos, y=\"es_rina\", x=x6, arboles=40)\ndos[\"dice_rina\"] = bosque.predicciones >= 0.5\ndos[\"acierta\"] = dos[\"dice_rina\"] == dos[\"es_rina\"]\n(dos.groupby(\"___\")[\"acierta\"].mean() * 100).round(1)",
-        huecos: [{ q: "¿Por qué grupo quieres comparar los aciertos?", op: ["zona", "sexo_victima", "ciclo_vital", "fin_de_semana"] }],
-        cer: { q: "¿Qué porcentaje acierta con las víctimas adultas mayores?", unidad: "%", tol: 0.4, calc: "aciertoMayor", ayuda: "Elige ciclo_vital y busca «Adulto Mayor».", despues: "Frente a más del 80 % con jóvenes y adultos. Ojo: son solo 58 casos." },
-        dec: { q: "Con los adultos mayores acierta bastante menos. ¿Qué harías antes de usarlo?", op: [
-          { t: "Nada: en promedio acierta 82 %", ok: false, fb: "El promedio esconde a los grupos pequeños. Un caso con víctima adulta mayor tiene casi el doble de probabilidad de quedar mal clasificado." },
-          { t: "Reportar el acierto por grupo y no usarlo donde falla más o donde hay muy pocos casos", ok: true, fb: "Eso es lo que se le reclamó a COMPAS: no basta con la exactitud global, hay que mirar a quién le caen los errores." } ] } },
-      { q: "Tus reglas para la Fiscalía.",
-        nota: { q: "Escribe tres reglas para usar (o no usar) este modelo de forma responsable." } },
+      { q: "¿Quién cuenta como cuidador?",
+        pista: "Marca los agresores que crían o cuidan a la víctima. La columna cuidador queda verdadera para ellos; su promedio es el % de casos con un cuidador como agresor.",
+        esq: "vif[\"cuidador\"] = vif[\"agresor\"].isin([___])\n(vif[\"cuidador\"].mean() * 100).round(1)",
+        huecos: [{ tipo: "lista", min: 2, max: 5, q: "¿Quiénes son cuidadores?", op: ["Padre", "Madre", "Padrastro", "Madrastra", "Encargado del cuidado", "Hermano", "Hijo", "Cuñado"] }],
+        cer: { q: "¿Qué % de los casos tiene a un cuidador como agresor?", unidad: "%", tol: 0.3, calc: "pctCuidador", ayuda: "Es el número que salió. Si marcaste hermano, hijo o cuñado, quítalos: no crían a la víctima.", despues: "El modelo tonto diría siempre «no es un cuidador» y acertaría en el resto de los casos." } },
+      { q: "Una sola pista, dos preguntas: ¿dónde corta el árbol?",
+        pista: "Con profundidad 2 el árbol hace dos preguntas seguidas. Si eliges una pista numérica, él mismo busca los valores de corte. Lee el diagrama de arriba abajo.",
+        esq: "arbol_edad = arbol_decision(vif, y=\"cuidador\", x=[\"___\"], profundidad=2)\narbol_edad",
+        huecos: [{ q: "¿Qué pista le das?", op: ["edad_aprox", "sexo_victima", "escenario", "factor_desencadenante"] }],
+        cer: { q: "¿En qué edad hace el árbol su primer corte?", tol: 0.3, calc: "corteEdad", ayuda: "Elige edad_aprox y lee la primera pregunta: «¿edad_aprox ≤ …?».", despues: "Es la mayoría de edad: el árbol la encontró solo, sin que nadie se la dijera." },
+        dec: { q: "¿Qué dicen las cuatro hojas?", op: [
+          { t: "El agresor es un cuidador en 3 de cada 4 casos hasta los 14 años; desde los 25 años casi nunca (5 %)", ok: true, fb: "Exacto. Y entre los 15 y los 17 todavía es más de la mitad. Ese es el rango de la escuela de padres." },
+          { t: "La edad no cambia mucho quién agrede", ok: false, fb: "Compara las hojas: de 75 % a 5 %. Pocas variables separan tanto." },
+          { t: "Los cuidadores agreden sobre todo a los adultos", ok: false, fb: "Al revés: mira la hoja de 25 años en adelante." } ] } },
+      { q: "El bosque con más pistas.",
+        pista: "Agrega otras pistas del caso: dónde pasó, qué hacía la víctima, el mecanismo… El bosque las combina. Compara la exactitud en prueba con el modelo tonto (≈ 68 %).",
+        esq: "bosque_vif = bosque_aleatorio(vif, y=\"cuidador\", x=[\"edad_aprox\", ___])\nbosque_vif",
+        huecos: [{ tipo: "lista", min: 1, max: 4, q: "¿Qué pistas le agregas a la edad?", op: ["escenario", "actividad", "sexo_victima", "mecanismo", "factor_desencadenante", "rango_hora"] }],
+        dato: { q: "¿Qué exactitud en prueba obtuvo tu bosque?", ph: "p. ej. 85,3 %" },
+        dec: { q: "¿Cuánto le saca al modelo tonto?", abierta: true, fb: "Unos 17 a 18 puntos: de 68 % a 85-86 %. La edad hace casi todo el trabajo; el resto afina.", op: [{ t: "Menos de 5 puntos" }, { t: "Entre 5 y 15 puntos" }, { t: "Más de 15 puntos" }] } },
+      { q: "Después del corte: ¿quién agrede a los adultos?",
+        pista: "Filtra las víctimas por encima de la edad de corte y mira quiénes son los agresores. Ahí está el público de los otros dos programas.",
+        esq: "grupo = vif[vif[\"edad_aprox\"] ___ 17]\n(grupo[\"agresor\"].value_counts(normalize=True) * 100).round(1).head(6)",
+        huecos: [{ q: "¿Qué víctimas quieres ver?", op: [{ v: ">", d: "Más de 17 años: adultos" }, { v: "<=", d: "17 años o menos: niños, niñas y adolescentes" }] }],
+        cer: { q: "Entre las víctimas adultas, ¿qué % de los agresores son hermanos?", unidad: "%", tol: 0.3, calc: "hermanoAdultos", ayuda: "Elige > 17 y busca la fila Hermano.", despues: "Siguen cuñados e hijos. Si filtras «>= 60», el hijo aparece primero: es el público del programa de cuidado." },
+        nota: { q: "Escribe la ficha para la Comisaría: qué programa para qué edades, con los números del árbol." } },
     ],
-    veredicto: "¿Aprobarías usar el modelo para llenar la circunstancia que falta? ¿Con qué reglas?" },
+    veredicto: "¿Hasta qué edad el agresor más probable es quien cría? ¿Qué programa propondrías para cada grupo de edad y con qué evidencia?" },
 ];
-
 
 /* ===================== App ===================== */
 const DATASETS = [
@@ -2240,7 +2384,7 @@ const DATASETS = [
   { name: "departamentos", file: "data/departamentos.csv", titulo: "Departamentos", desc: "33 departamentos: homicidios 2015-2018, población aproximada (Censo 2018, en miles) y tasa por 100.000 habitantes.", fuente: "Agregado de vtub-3de2 + DANE" },
 ];
 const DICCIONARIO = {
-  anio: "Año del hecho", mes: "Mes del hecho (texto)", mes_num: "Mes 1-12", dia_semana: "Día de la semana", dia_num: "Día 1 (lunes) a 7 (domingo)", rango_hora: "Rango de 3 horas del hecho", hora_inicio: "Hora en que inicia el rango (0-21)", departamento: "Departamento del hecho", municipio: "Municipio del hecho", zona: "Cabecera municipal / rural / centro poblado", sexo_victima: "Sexo de la víctima", edad_aprox: "Punto medio del grupo de edad quinquenal", ciclo_vital: "Etapa de vida de la víctima", escolaridad: "Nivel educativo", estado_civil: "Estado civil", escenario: "Lugar donde ocurrió", circunstancia: "Circunstancia del hecho (riña, ajuste de cuentas…)", mecanismo: "Mecanismo causal de la lesión", lesion: "Diagnóstico topográfico", presunto_agresor: "Relación del presunto agresor con la víctima", fin_de_semana: "True si sábado o domingo", arma_fuego: "True si el mecanismo fue proyectil de arma de fuego", tipo_violencia: "Contra niños/adolescentes, entre otros familiares o contra adulto mayor", actividad: "Qué hacía la víctima", sexo_agresor: "Sexo del presunto agresor", agresor: "Parentesco del agresor", factor_desencadenante: "Motivo reportado de la agresión", dias_incapacidad: "Días de incapacidad médico-legal (rango)", menor_de_edad: "True si edad < 18", lesion_grave: "True si incapacidad > 30 días", fecha: "Fecha (AAAA-MM-DD)", arma: "Arma o medio (Policía)", modalidad: "Modalidad presunta (Policía)", cantidad: "Número de víctimas del registro", homicidios: "Total de homicidios ese día", mujeres: "Víctimas mujeres ese día", dia_mes: "Día del mes", dia_del_anio: "Día del año 1-365", t: "Número de día desde el inicio (para tendencias)", festivo_fijo: "True el 1-ene, 1-may, 20-jul, 7-ago, 25-dic y 31-dic", quincena: "True los días 1, 15, 16, 30 y 31", casos: "Homicidios en el municipio 2015-2018", pct_arma_fuego: "% con arma de fuego", pct_mujeres: "% víctimas mujeres", pct_rural: "% en zona rural", pct_noche: "% entre 18:00 y 03:00", pct_fin_semana: "% en fin de semana", pct_via_publica: "% en vía pública", pct_vivienda: "% en vivienda", pct_rina: "% por riña", pct_ajuste_cuentas: "% por venganza/ajuste de cuentas", pct_sin_info_circunstancia: "% sin información de circunstancia", edad_media: "Edad media de las víctimas", pct_menores: "% menores de 18", homicidios_2015_2018: "Homicidios registrados 2015-2018", poblacion_miles_2018: "Población (miles, Censo 2018, aprox.)", homicidios_por_anio: "Promedio anual", tasa_x_100mil: "Homicidios por 100.000 habitantes y año",
+  anio: "Año del hecho", mes: "Mes del hecho (texto)", mes_num: "Mes 1-12", dia_semana: "Día de la semana", dia_num: "Día 1 (lunes) a 7 (domingo)", rango_hora: "Rango de 3 horas del hecho", hora_inicio: "Hora en que inicia el rango (0-21)", departamento: "Departamento del hecho", municipio: "Municipio del hecho", zona: "Cabecera municipal / rural / centro poblado", sexo_victima: "Sexo de la víctima", edad_aprox: "Punto medio del grupo de edad quinquenal", ciclo_vital: "Etapa de vida de la víctima", escolaridad: "Nivel educativo", estado_civil: "Estado civil", escenario: "Lugar donde ocurrió", circunstancia: "Circunstancia del hecho (riña, ajuste de cuentas…)", mecanismo: "Mecanismo causal de la lesión", lesion: "Diagnóstico topográfico", presunto_agresor: "Relación del presunto agresor con la víctima", fin_de_semana: "True si sábado o domingo", arma_fuego: "True si el mecanismo fue proyectil de arma de fuego", tipo_violencia: "Contra niños/adolescentes, entre otros familiares o contra adulto mayor", actividad: "Qué hacía la víctima", sexo_agresor: "Sexo del presunto agresor", agresor: "Parentesco del agresor", factor_desencadenante: "Motivo reportado de la agresión", dias_incapacidad: "Días de incapacidad médico-legal (rango)", menor_de_edad: "True si edad < 18", lesion_grave: "True si incapacidad > 30 días", fecha: "Fecha (AAAA-MM-DD)", arma: "Arma o medio (Policía)", modalidad: "Modalidad presunta (Policía)", cantidad: "Número de víctimas del registro", homicidios: "Total de homicidios ese día", mujeres: "Víctimas mujeres ese día", dia_mes: "Día del mes", dia_del_anio: "Día del año 1-365", t: "Número de día desde el inicio (para tendencias)", festivo_fijo: "True el 1-ene, 1-may, 20-jul, 7-ago, 25-dic y 31-dic", quincena: "True los días 1, 15, 16, 30 y 31", festivo: "True los festivos oficiales de Colombia (incluye los que se pasan a lunes y Semana Santa)", navidad_o_anio_nuevo: "True el 25 de diciembre y el 1 de enero", casos: "Homicidios en el municipio 2015-2018", pct_arma_fuego: "% con arma de fuego", pct_mujeres: "% víctimas mujeres", pct_rural: "% en zona rural", pct_noche: "% entre 18:00 y 03:00", pct_fin_semana: "% en fin de semana", pct_via_publica: "% en vía pública", pct_vivienda: "% en vivienda", pct_rina: "% por riña", pct_ajuste_cuentas: "% por venganza/ajuste de cuentas", pct_sin_info_circunstancia: "% sin información de circunstancia", edad_media: "Edad media de las víctimas", pct_menores: "% menores de 18", homicidios_2015_2018: "Homicidios registrados 2015-2018", poblacion_miles_2018: "Población (miles, Censo 2018, aprox.)", homicidios_por_anio: "Promedio anual", tasa_x_100mil: "Homicidios por 100.000 habitantes y año",
 };
 const REFERENCIA = [
   ["Ver los datos", [["df.head(10)", "primeras filas"], ["df.shape", "filas y columnas"], ["df.columns", "nombres de columnas"], ["df.info()", "tipo y ejemplo de cada columna"], ["df.sample(5)", "filas al azar"], ["df.describe()", "resumen numérico"]]],
@@ -2249,7 +2393,7 @@ const REFERENCIA = [
   ["Agrupar y cruzar", [["df.groupby(\"g\")[\"v\"].mean()", "promedio por grupo"], ["df.groupby(\"g\").size()", "conteo por grupo"], ["df.groupby(\"g\")[\"v\"].agg([\"mean\", \"count\"])", "varias funciones"], ["pd.crosstab(df[\"a\"], df[\"b\"])", "tabla cruzada"], ["pd.crosstab(df[\"a\"], df[\"b\"], normalize=\"index\")", "% por fila"], ["df.sort_values(\"col\", ascending=False)", "ordenar"], ["pd.cut(df[\"edad_aprox\"], bins=[0, 17, 29, 59, 120], labels=[\"menor\", \"joven\", \"adulto\", \"mayor\"])", "agrupar números en rangos"]]],
   ["Graficar", [["grafico_barras(serie, horizontal=True, titulo=\"...\")", "barras"], ["grafico_lineas(serie)", "líneas"], ["histograma(df[\"edad_aprox\"], bins=20)", "histograma"], ["mapa_calor(tabla_cruzada)", "mapa de calor"], ["mapa_calor(tabla_cruzada, normalize=\"index\")", "mapa de calor en % por fila (o \"columns\", \"all\")"], ["dispersion(df, x=\"a\", y=\"b\", color=\"g\", tendencia=True)", "dispersión"], ["cajas(df, valor=\"v\", grupo=\"g\")", "diagrama de cajas"], ["serie.plot(kind=\"bar\")", "estilo pandas: bar, barh, line, pie, hist"]]],
   ["Pruebas", [["prueba_t(grupo1, grupo2)", "comparar dos medias"], ["anova(df, valor=\"v\", grupo=\"g\")", "comparar varias medias"], ["chi_cuadrado(tabla_cruzada)", "asociación entre categorías"], ["correlacion(df[\"a\"], df[\"b\"])", "r de Pearson"], ["intervalo_confianza(serie)", "IC 95 %"], ["tasa(conteo, poblacion, por=100000)", "tasas"]]],
-  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["tendencia_anual(diarios, y=[\"homicidios\", \"mujeres\"])", "tendencia por año y en % de su promedio"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\"], umbral=0.2)", "umbral: con qué probabilidad dice «sí»"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"]]],
+  ["Modelos", [["kmeans(df[[\"a\", \"b\"]], k=3)", "agrupar (resultado.etiquetas, .centros)"], ["codo(df[[\"a\", \"b\"]], k_max=8)", "elegir k"], ["pca(df[[\"a\", \"b\", \"c\"]])", "componentes (.PC1, .PC2, .cargas)"], ["regresion_lineal(df, y=\"v\", x=[\"a\", \"b\"])", "predecir un número"], ["tendencia_anual(diarios, y=[\"homicidios\", \"mujeres\"])", "tendencia por año y en % de su promedio"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\", \"b\"])", "predecir sí/no"], ["regresion_logistica(df, y=\"binaria\", x=[\"a\"], umbral=0.2)", "umbral: con qué probabilidad dice «sí»"], ["arbol_decision(df, y=\"v\", x=[\"a\", \"b\"], profundidad=3)", "árbol"], ["bosque_aleatorio(df, y=\"v\", x=[\"a\", \"b\"], arboles=40)", "bosque"], ["predecir(modelo, tabla_nueva)", "usar el modelo en casos nuevos (probabilidad o número)"]]],
 ];
 
 const store = { get(k, d) { try { const v = localStorage.getItem("lab:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem("lab:" + k, JSON.stringify(v)); } catch {} } };
@@ -2287,8 +2431,8 @@ function makeGlobals() {
   fn("anova", ([a, b], kw) => anova(a, b, kw)); fn("chi_cuadrado", ([t]) => chi_cuadrado(t)); fn("chi2", ([t]) => chi_cuadrado(t));
   fn("correlacion", ([a, b]) => correlacion(a, b)); fn("intervalo_confianza", ([s], kw) => intervalo_confianza(s, kw)); fn("tasa", ([a, b], kw) => tasa(a, b, kw));
   fn("kmeans", ([df, k], kw) => kmeans(df, kw, [k])); fn("codo", ([df], kw) => codo(df, kw)); fn("pca", ([df], kw) => pca(df, kw));
-  fn("regresion_lineal", ([df], kw) => regresion_lineal(df, kw)); fn("tendencia_anual", ([df, y], kw) => tendencia_anual(df, kw, [y])); fn("regresion_logistica", ([df], kw) => regresion_logistica(df, kw));
-  fn("arbol_decision", ([df], kw) => arbol_decision(df, kw)); fn("bosque_aleatorio", ([df], kw) => bosque_aleatorio(df, kw)); fn("matriz_confusion", ([a, b]) => matriz_confusion(a, b));
+  fn("regresion_lineal", ([df], kw) => __envolver(regresion_lineal)(df, kw)); fn("tendencia_anual", ([df, y], kw) => tendencia_anual(df, kw, [y])); fn("regresion_logistica", ([df], kw) => __envolver(regresion_logistica)(df, kw));
+  fn("arbol_decision", ([df], kw) => __envolver(arbol_decision)(df, kw)); fn("bosque_aleatorio", ([df], kw) => __envolver(bosque_aleatorio)(df, kw)); fn("predecir", ([m, df]) => predecir(m, df)); fn("matriz_confusion", ([a, b]) => matriz_confusion(a, b));
   // gráficas
   fn("grafico_barras", ([s], kw) => grafico_barras(s, kw)); fn("grafico_lineas", ([s], kw) => grafico_lineas(s, kw)); fn("histograma", ([s], kw) => histograma(s, kw));
   fn("dispersion", ([df, x, y], kw) => dispersion(df, kw, [x, y])); fn("mapa_calor", ([t], kw) => mapa_calor(t, kw)); fn("cajas", ([df], kw) => cajas(df, kw));
@@ -2345,7 +2489,7 @@ function renderStat(r, out) {
   const box = document.createElement("div"); box.className = "stat";
   const h = document.createElement("div"); h.className = "st-title"; h.textContent = r.title; box.append(h);
   const t = document.createElement("table"); t.className = "kv"; for (const [k, v] of r.rows) { const tr = document.createElement("tr"); const a = document.createElement("td"); a.textContent = k; const b = document.createElement("td"); b.textContent = typeof v === "number" ? fmtNum(v) : String(v); tr.append(a, b); t.append(tr); } box.append(t);
-  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "figure") renderFigure(x.fig, d); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; const hojas = (x.text.match(/predice/g) || []).length; if (x.text.split("\n").length > 40) { const det = document.createElement("details"); const sm = document.createElement("summary"); sm.className = "caption"; sm.style.cursor = "pointer"; sm.textContent = `${x.caption || "Reglas"} · ${hojas} hojas: demasiadas para leerlas en voz alta (clic para verlas)`; det.append(sm, p); d.append(det); } else d.append(c, p); } box.append(d); }
+  for (const x of r.extra) { const d = document.createElement("div"); d.className = "extra"; if (x.type === "table") renderTable(x.df, d, { caption: x.caption, max: 40 }); else if (x.type === "figure") renderFigure(x.fig, d); else if (x.type === "pre") { const c = document.createElement("div"); c.className = "caption"; c.textContent = x.caption || ""; const p = document.createElement("pre"); p.textContent = x.text; const hojas = (x.text.match(/predice/g) || []).length; if (x.colapsado || x.text.split("\n").length > 40) { const det = document.createElement("details"); const sm = document.createElement("summary"); sm.className = "caption"; sm.style.cursor = "pointer"; sm.textContent = x.colapsado ? `${x.caption || "Reglas"} en texto (clic para verlas)` : `${x.caption || "Reglas"} · ${hojas} hojas: demasiadas para leerlas en voz alta (clic para verlas)`; det.append(sm, p); d.append(det); } else d.append(c, p); } box.append(d); }
   if (r.interp) { const i = document.createElement("div"); i.className = "interp"; i.textContent = r.interp; box.append(i); }
   out.append(box);
 }
@@ -2788,11 +2932,12 @@ PROHIBIDO (aquí no existe): importar librerías (sklearn, matplotlib, seaborn, 
   codo(tabla[[cols]], k_max=8)
   pca(tabla[[cols]]) → .PC1 .PC2 .cargas .varianza_explicada .componentes (para graficar: tabla["PC1"] = c.PC1; tabla["PC2"] = c.PC2; dispersion(tabla, x="PC1", y="PC2", color="grupo"))
   chi_cuadrado(tabla) → .chi2 .p .v_cramer .residuos; correlacion(a, b) → .r .p
-  regresion_lineal(df, y=, x=[...]) → .coeficientes .r2 .mae .predicciones
+  regresion_lineal(df, y=, x=[...]) → .coeficientes .r2 .mae .r2_prueba .mae_prueba .mae_tonto .predicciones (para comparar con árboles y bosques usa r2_prueba y mae_prueba)
   tendencia_anual(diarios, y=["homicidios", "mujeres"]) → tabla con el cambio por día, por año y como % del promedio de cada serie
   regresion_logistica(df, y=binaria, x=[...], umbral=0.5) → .coeficientes (con odds_ratio) .exactitud .sensibilidad .especificidad .precision .matriz_confusion .probabilidades
   arbol_decision(df, y=, x=[...], profundidad=3) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .arbol (si y es numérica: .r2 .mae)
   bosque_aleatorio(df, y=, x=[...], arboles=40) → .exactitud .exactitud_entrenamiento .importancia .matriz_confusion .predicciones (probabilidad de «sí») (si y es numérica: .r2 .mae). No tiene .coeficientes. grafico_barras(bosque, horizontal=True) grafica la importancia.
+  predecir(modelo, tabla) → una predicción por fila de la tabla: probabilidad de «sí» (árbol, bosque o logística) o el número predicho (si y es numérica). La tabla debe tener las columnas x del modelo; sirve para casos nuevos (p. ej. los que no tienen circunstancia) o un caso inventado: caso = pd.DataFrame({"dia_num": [7], "anio": [2005], "festivo": [False], "quincena": [True]}); predecir(arbol, caso)
   Escribir solo el nombre del resultado (p. ej. modelo) en la última línea muestra su resumen completo.
 - Bases cargadas (no hace falta leer archivos): ${DATASETS.map((d) => `${d.name} (${d.titulo}: columnas ${state.data[d.name] ? state.data[d.name].columns.join(", ") : ""})`).join("; ")}.
 - Para mostrar un resultado déjalo como ÚLTIMA línea de la celda (como Jupyter). print() también muestra tablas y textos f"...".
